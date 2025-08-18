@@ -2,6 +2,12 @@ use crate::{cursor::Cursor, rope_buffer::RopeBuffer};
 use std::path::PathBuf;
 
 #[derive(Clone)]
+struct EditorState {
+    buffer: RopeBuffer,
+    cursor: Cursor,
+}
+
+#[derive(Clone)]
 pub struct Tab {
     pub name: String,
     pub path: Option<PathBuf>,
@@ -9,6 +15,10 @@ pub struct Tab {
     pub cursor: Cursor,
     pub viewport_offset: (usize, usize),
     pub modified: bool,
+    pub preview_mode: bool,
+    undo_stack: Vec<EditorState>,
+    redo_stack: Vec<EditorState>,
+    max_undo_history: usize,
 }
 
 impl Tab {
@@ -20,6 +30,10 @@ impl Tab {
             cursor: Cursor::new(),
             viewport_offset: (0, 0),
             modified: false,
+            preview_mode: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            max_undo_history: 100,
         }
     }
 
@@ -30,6 +44,13 @@ impl Tab {
             .unwrap_or("untitled")
             .to_string();
         
+        // Check if this is a markdown file and activate preview mode by default
+        let is_markdown = if let Some(ext) = path.extension() {
+            ext == "md" || ext == "markdown"
+        } else {
+            name.ends_with(".md") || name.ends_with(".markdown")
+        };
+        
         Self {
             name,
             path: Some(path),
@@ -37,14 +58,22 @@ impl Tab {
             cursor: Cursor::new(),
             viewport_offset: (0, 0),
             modified: false,
+            preview_mode: is_markdown, // Default to preview mode for markdown files
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            max_undo_history: 100,
         }
     }
 
     pub fn display_name(&self) -> String {
+        let mut name = self.name.clone();
+        if self.preview_mode {
+            name = format!("[Preview] {}", name);
+        }
         if self.modified {
-            format!("{}*", self.name)
+            format!("{}*", name)
         } else {
-            self.name.clone()
+            name
         }
     }
 
@@ -80,6 +109,89 @@ impl Tab {
     pub fn ensure_cursor_visible(&mut self, height: usize) {
         // Force viewport to show cursor (used after cursor movement)
         self.update_viewport(height);
+    }
+    
+    pub fn toggle_preview_mode(&mut self) {
+        // Only allow preview mode for markdown files
+        if self.is_markdown() {
+            self.preview_mode = !self.preview_mode;
+        }
+    }
+    
+    pub fn is_markdown(&self) -> bool {
+        // Check if the file has a markdown extension
+        if let Some(path) = &self.path {
+            if let Some(ext) = path.extension() {
+                return ext == "md" || ext == "markdown";
+            }
+        }
+        // Also check if the tab name ends with .md
+        self.name.ends_with(".md") || self.name.ends_with(".markdown")
+    }
+    
+    pub fn save_state(&mut self) {
+        // Save current state before making changes
+        let state = EditorState {
+            buffer: self.buffer.clone(),
+            cursor: self.cursor.clone(),
+        };
+        
+        // Add to undo stack
+        self.undo_stack.push(state);
+        
+        // Limit undo history size
+        if self.undo_stack.len() > self.max_undo_history {
+            self.undo_stack.remove(0);
+        }
+        
+        // Clear redo stack when new changes are made
+        self.redo_stack.clear();
+    }
+    
+    pub fn undo(&mut self) -> bool {
+        if let Some(previous_state) = self.undo_stack.pop() {
+            // Save current state to redo stack
+            let current_state = EditorState {
+                buffer: self.buffer.clone(),
+                cursor: self.cursor.clone(),
+            };
+            self.redo_stack.push(current_state);
+            
+            // Restore previous state
+            self.buffer = previous_state.buffer;
+            self.cursor = previous_state.cursor;
+            
+            // Clear modified flag if we're back to the original state (no more undo history)
+            if self.undo_stack.is_empty() {
+                self.modified = false;
+            }
+            
+            true
+        } else {
+            false
+        }
+    }
+    
+    pub fn redo(&mut self) -> bool {
+        if let Some(next_state) = self.redo_stack.pop() {
+            // Save current state to undo stack
+            let current_state = EditorState {
+                buffer: self.buffer.clone(),
+                cursor: self.cursor.clone(),
+            };
+            self.undo_stack.push(current_state);
+            
+            // Restore next state
+            self.buffer = next_state.buffer;
+            self.cursor = next_state.cursor;
+            
+            // Mark as modified
+            self.modified = true;
+            
+            true
+        } else {
+            false
+        }
     }
 }
 

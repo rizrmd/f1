@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::{cursor::{Cursor, Position}, rope_buffer::RopeBuffer};
+use crate::{cursor::{Cursor, Position}, rope_buffer::RopeBuffer, ui::{VerticalScrollbar, ScrollbarState}};
 
 pub struct EditorWidget<'a> {
     buffer: &'a RopeBuffer,
@@ -14,6 +14,7 @@ pub struct EditorWidget<'a> {
     viewport_offset: (usize, usize),
     show_line_numbers: bool,
     focused: bool,
+    show_scrollbar: bool,
 }
 
 impl<'a> EditorWidget<'a> {
@@ -24,6 +25,7 @@ impl<'a> EditorWidget<'a> {
             viewport_offset: (0, 0),
             show_line_numbers: true,
             focused: true,
+            show_scrollbar: true,
         }
     }
 
@@ -39,6 +41,12 @@ impl<'a> EditorWidget<'a> {
 
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn show_scrollbar(mut self, show: bool) -> Self {
+        self.show_scrollbar = show;
         self
     }
 
@@ -135,16 +143,24 @@ impl<'a> Widget for EditorWidget<'a> {
             0
         };
         
+        let scrollbar_width = if self.show_scrollbar && self.buffer.len_lines() > inner.height as usize {
+            1
+        } else {
+            0
+        };
+
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Length(line_number_width),
                 Constraint::Min(0),
+                Constraint::Length(scrollbar_width),
             ])
             .split(inner);
         
         let line_numbers_area = chunks[0];
         let content_area = chunks[1];
+        let scrollbar_area = if scrollbar_width > 0 { Some(chunks[2]) } else { None };
         
         let visible_lines = content_area.height as usize;
         let start_line = self.viewport_offset.0;
@@ -193,5 +209,21 @@ impl<'a> Widget for EditorWidget<'a> {
         
         let content = Paragraph::new(lines);
         content.render(content_area, buf);
+
+        // Render scrollbar if needed
+        if let Some(scrollbar_area) = scrollbar_area {
+            let scrollbar_state = ScrollbarState::new(
+                self.buffer.len_lines(),
+                visible_lines,
+                start_line,
+            );
+            
+            let scrollbar = VerticalScrollbar::new(scrollbar_state)
+                .style(Style::default().fg(Color::Reset))
+                .thumb_style(Style::default().fg(Color::White))
+                .track_symbols(VerticalScrollbar::minimal());
+            
+            scrollbar.render(scrollbar_area, buf);
+        }
     }
 }

@@ -69,6 +69,16 @@ pub fn handle_key_event(
             Some(EditorCommand::Modified)
         }
         
+        // Undo - Ctrl+Z
+        KeyCode::Char('z') if has_ctrl && !has_shift => Some(EditorCommand::Undo),
+        
+        // Redo - Ctrl+Shift+Z or Ctrl+Y
+        KeyCode::Char('z') if has_ctrl && has_shift => Some(EditorCommand::Redo),
+        KeyCode::Char('y') if has_ctrl => Some(EditorCommand::Redo),
+        
+        // Toggle Preview - Ctrl+U (for markdown files)
+        KeyCode::Char('u') if has_ctrl => Some(EditorCommand::TogglePreview),
+        
         // Menu - F1
         KeyCode::F(1) => Some(EditorCommand::ToggleMenu),
         
@@ -372,4 +382,7 @@ pub enum EditorCommand {
     ToggleMenu,
     OpenFile,
     CurrentTab,
+    Undo,
+    Redo,
+    TogglePreview,
 }

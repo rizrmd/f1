@@ -2,6 +2,7 @@ mod app;
 mod cursor;
 mod editor_widget;
 mod keyboard;
+mod markdown_widget;
 mod menu;
 mod rope_buffer;
 mod tab;

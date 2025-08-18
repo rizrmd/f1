@@ -1,12 +1,13 @@
 use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use std::time::{Duration, Instant};
+use std::path::PathBuf;
 
 use crate::keyboard::{handle_key_event, EditorCommand};
 use crate::tab::{Tab, TabManager};
-use crate::ui::UI;
+use crate::ui::{UI, ScrollbarState};
 use crate::cursor::Position;
-use crate::menu::MenuSystem;
+use crate::menu::{MenuSystem, FileItem};
 
 pub struct App {
     pub tab_manager: TabManager,
@@ -16,11 +17,14 @@ pub struct App {
     pub pending_close: bool,
     pub pending_quit: bool,
     pub warning_selected_button: usize, // 0 = No, 1 = Yes
+    pub warning_is_info: bool, // true = OK button only, false = Yes/No buttons
     pub mouse_selecting: bool,
     last_click_time: Option<Instant>,
     last_click_pos: Option<(u16, u16)>,
     terminal_size: (u16, u16), // (width, height)
     pub menu_system: MenuSystem,
+    scrollbar_dragging: bool,
+    file_picker_scrollbar_dragging: bool,
 }
 
 impl App {
@@ -33,11 +37,14 @@ impl App {
             pending_close: false,
             pending_quit: false,
             warning_selected_button: 0, // Default to "No" (safer)
+            warning_is_info: false,
             mouse_selecting: false,
             last_click_time: None,
             last_click_pos: None,
             terminal_size: (80, 24), // Default size, will be updated during draw
             menu_system: MenuSystem::new(),
+            scrollbar_dragging: false,
+            file_picker_scrollbar_dragging: false,
         }
     }
 
@@ -70,13 +77,36 @@ impl App {
                 }
             }
             EditorCommand::ToggleMenu => {
-                self.menu_system.toggle_main_menu();
+                let (is_markdown, in_preview_mode) = if let Some(tab) = self.tab_manager.active_tab() {
+                    (tab.is_markdown(), tab.preview_mode)
+                } else {
+                    (false, false)
+                };
+                self.menu_system.toggle_main_menu(is_markdown, in_preview_mode);
             }
             EditorCommand::OpenFile => {
-                self.menu_system.open_file_picker();
+                // Get the current tab's file path to open picker in that directory
+                let current_path = self.tab_manager.active_tab()
+                    .and_then(|tab| tab.path.clone());
+                self.menu_system.open_file_picker_at_path(current_path);
             }
             EditorCommand::CurrentTab => {
                 self.menu_system.open_current_tab_menu();
+            }
+            EditorCommand::Undo => {
+                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                    tab.undo();
+                }
+            }
+            EditorCommand::Redo => {
+                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                    tab.redo();
+                }
+            }
+            EditorCommand::TogglePreview => {
+                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                    tab.toggle_preview_mode();
+                }
             }
         }
     }
@@ -125,13 +155,21 @@ impl App {
                                 self.menu_system.open_current_tab_menu();
                             }
                             "open_file" => {
-                                self.menu_system.open_file_picker();
+                                // Get the current tab's file path to open picker in that directory
+                                let current_path = self.tab_manager.active_tab()
+                                    .and_then(|tab| tab.path.clone());
+                                self.menu_system.open_file_picker_at_path(current_path);
                             }
                             "close_tab" => {
                                 self.handle_close_tab();
                             }
                             "close_other_tab" => {
                                 self.tab_manager.close_other_tabs();
+                            }
+                            "toggle_preview" => {
+                                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                    tab.toggle_preview_mode();
+                                }
                             }
                             "quit" => {
                                 self.handle_quit();
@@ -151,6 +189,28 @@ impl App {
 
         let needs_viewport_update = if let Some(tab) = self.tab_manager.active_tab_mut() {
             let old_cursor_pos = tab.cursor.position.clone();
+            
+            // Check if this is a modification command that needs state saving
+            let should_save_state = matches!(key.code, 
+                crossterm::event::KeyCode::Backspace |
+                crossterm::event::KeyCode::Delete |
+                crossterm::event::KeyCode::Enter |
+                crossterm::event::KeyCode::Tab
+            ) || (matches!(key.code, crossterm::event::KeyCode::Char(_)) 
+                && !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::SUPER)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+                && !key.modifiers.contains(KeyModifiers::META))
+            || (matches!(key.code, crossterm::event::KeyCode::Char('v')) 
+                && key.modifiers.contains(KeyModifiers::CONTROL))
+            || (matches!(key.code, crossterm::event::KeyCode::Char('x')) 
+                && key.modifiers.contains(KeyModifiers::CONTROL));
+            
+            // Save state before modifications
+            if should_save_state {
+                tab.save_state();
+            }
+            
             let command = handle_key_event(key, &mut tab.buffer, &mut tab.cursor);
             let cursor_moved = tab.cursor.position != old_cursor_pos;
             
@@ -182,8 +242,9 @@ impl App {
                 return;
             }
             
-            // Don't scroll if file picker is open
+            // Handle scroll in file picker if it's open
             if matches!(self.menu_system.state, crate::menu::MenuState::FilePicker(_)) {
+                self.handle_mouse_on_file_picker(mouse);
                 return;
             }
             
@@ -217,7 +278,7 @@ impl App {
         // Update terminal size
         self.terminal_size = (frame.area().width, frame.area().height);
         
-        self.ui.draw(frame, &mut self.tab_manager, &self.warning_message, self.warning_selected_button, &self.menu_system);
+        self.ui.draw(frame, &mut self.tab_manager, &self.warning_message, self.warning_selected_button, self.warning_is_info, &self.menu_system);
     }
 
     fn handle_quit(&mut self) {
@@ -279,7 +340,12 @@ impl App {
             
             // Enter to activate selected button
             (KeyCode::Enter, KeyModifiers::NONE) => {
-                if self.warning_selected_button == 1 {
+                if self.warning_is_info {
+                    // Info dialog - just close it
+                    self.warning_message = None;
+                    self.warning_selected_button = 0;
+                    self.warning_is_info = false;
+                } else if self.warning_selected_button == 1 {
                     // Yes button selected
                     self.warning_message = None;
                     self.warning_selected_button = 0;
@@ -366,6 +432,49 @@ impl App {
 
         // Get the active tab index to avoid borrowing conflicts
         let active_index = self.tab_manager.active_index();
+        
+        // Check if interaction is on scrollbar (rightmost column in editor area)
+        if let Some(tab) = self.tab_manager.active_tab() {
+            let content_lines = if tab.preview_mode && tab.is_markdown() {
+                // For markdown preview, count the rendered lines
+                let content = tab.buffer.to_string();
+                let markdown_widget = crate::markdown_widget::MarkdownWidget::new(&content);
+                markdown_widget.parse_markdown().len()
+            } else {
+                // For normal editor, use buffer lines
+                tab.buffer.len_lines()
+            };
+            
+            let has_scrollbar = content_lines > (self.terminal_size.1 as usize).saturating_sub(2);
+            if has_scrollbar && mouse.column == self.terminal_size.0.saturating_sub(1) && mouse.row > 0 && (mouse.row as usize) < (self.terminal_size.1 as usize).saturating_sub(1) {
+                match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        self.scrollbar_dragging = true;
+                        self.handle_scrollbar_click(mouse);
+                        return;
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        if self.scrollbar_dragging {
+                            self.handle_scrollbar_click(mouse);
+                            return;
+                        }
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        if self.scrollbar_dragging {
+                            self.scrollbar_dragging = false;
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Stop scrollbar dragging if mouse is released anywhere
+        if let MouseEventKind::Up(MouseButton::Left) = mouse.kind {
+            self.scrollbar_dragging = false;
+            self.file_picker_scrollbar_dragging = false;
+        }
         
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -660,7 +769,12 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 // Check if click is on F1 menu button in status bar
                 if self.is_f1_button_clicked(mouse.column, mouse.row) {
-                    self.menu_system.toggle_main_menu();
+                    let (is_markdown, in_preview_mode) = if let Some(tab) = self.tab_manager.active_tab() {
+                        (tab.is_markdown(), tab.preview_mode)
+                    } else {
+                        (false, false)
+                    };
+                    self.menu_system.toggle_main_menu(is_markdown, in_preview_mode);
                     return true;
                 }
 
@@ -680,7 +794,16 @@ impl App {
                                 if let Some(action) = self.menu_system.handle_enter() {
                                     match action.as_str() {
                                         "current_tab" => self.menu_system.open_current_tab_menu(),
-                                        "open_file" => self.menu_system.open_file_picker(),
+                                        "open_file" => {
+                                            let current_path = self.tab_manager.active_tab()
+                                                .and_then(|tab| tab.path.clone());
+                                            self.menu_system.open_file_picker_at_path(current_path);
+                                        }
+                                        "toggle_preview" => {
+                                            if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                                tab.toggle_preview_mode();
+                                            }
+                                        }
                                         "quit" => self.handle_quit(),
                                         _ => {}
                                     }
@@ -788,11 +911,110 @@ impl App {
         use crossterm::event::{MouseEventKind, MouseButton};
         
         match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                if let crate::menu::MenuState::FilePicker(picker_state) = &self.menu_system.state {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // Handle scroll in file picker
+                if let crate::menu::MenuState::FilePicker(picker_state) = &mut self.menu_system.state {
+                    let scroll_amount = 3;
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            picker_state.selected_index = picker_state.selected_index.saturating_sub(scroll_amount);
+                            picker_state.hovered_index = None; // Clear hover when scrolling
+                        }
+                        MouseEventKind::ScrollDown => {
+                            let max_index = picker_state.filtered_items.len().saturating_sub(1);
+                            picker_state.selected_index = (picker_state.selected_index + scroll_amount).min(max_index);
+                            picker_state.hovered_index = None; // Clear hover when scrolling
+                        }
+                        _ => {}
+                    }
+                    return true;
+                }
+            }
+            MouseEventKind::Moved => {
+                // Handle hover on file picker items
+                if let crate::menu::MenuState::FilePicker(picker_state) = &mut self.menu_system.state {
                     // Calculate file picker modal area (same as in UI draw method)
-                    let modal_width = 60u16.min(self.terminal_size.0.saturating_sub(4));
-                    let modal_height = 20u16.min(self.terminal_size.1.saturating_sub(4));
+                    let modal_width = 70u16.min(self.terminal_size.0.saturating_sub(4));
+                    let modal_height = 24u16.min(self.terminal_size.1.saturating_sub(4));
+                    let modal_x = (self.terminal_size.0.saturating_sub(modal_width)) / 2;
+                    let modal_y = (self.terminal_size.1.saturating_sub(modal_height)) / 2;
+                    
+                    // Check if mouse is within modal bounds
+                    if mouse.column >= modal_x && mouse.column < modal_x + modal_width &&
+                       mouse.row >= modal_y && mouse.row < modal_y + modal_height {
+                        
+                        // Calculate file list area (accounting for margin and search input)
+                        let list_start_y = modal_y + 1 + 1 + 1 + 1; // border + margin + current dir + search + separator
+                        let is_searching = !picker_state.search_query.is_empty();
+                        let items_per_entry = if is_searching { 2 } else { 1 };
+                        let list_height = modal_height.saturating_sub(5); // subtract borders and other elements
+                        
+                        // Check if click is on scrollbar (rightmost column of file list area)
+                        let total_items = picker_state.filtered_items.len();
+                        let has_scrollbar = total_items * items_per_entry > list_height as usize;
+                        if has_scrollbar && mouse.column == modal_x + modal_width - 2 && // -2 for border and scrollbar position
+                           mouse.row >= list_start_y && mouse.row < list_start_y + list_height {
+                            // This is a scrollbar interaction, handle it based on event type
+                            match mouse.kind {
+                                MouseEventKind::Down(MouseButton::Left) => {
+                                    self.file_picker_scrollbar_dragging = true;
+                                    self.handle_file_picker_scrollbar_click(mouse);
+                                    return true;
+                                }
+                                MouseEventKind::Drag(MouseButton::Left) => {
+                                    if self.file_picker_scrollbar_dragging {
+                                        self.handle_file_picker_scrollbar_click(mouse);
+                                        return true; // Consume the drag event
+                                    } else {
+                                        return true; // Not our drag, ignore
+                                    }
+                                }
+                                MouseEventKind::Up(MouseButton::Left) => {
+                                    if self.file_picker_scrollbar_dragging {
+                                        self.file_picker_scrollbar_dragging = false;
+                                    }
+                                    return true; // Consume the event
+                                }
+                                _ => return true, // Consume other scrollbar events
+                            }
+                        }
+                        
+                        if mouse.row >= list_start_y && mouse.row < list_start_y + list_height {
+                            // Calculate which item is being hovered
+                            let relative_y = (mouse.row - list_start_y) as usize;
+                            let item_index = relative_y / items_per_entry;
+                            let visible_items = (list_height as usize) / items_per_entry;
+                            
+                            let start_index = if picker_state.selected_index >= visible_items {
+                                picker_state.selected_index.saturating_sub(visible_items - 1)
+                            } else {
+                                0
+                            };
+                            
+                            let hovered_index = start_index + item_index;
+                            
+                            if hovered_index < picker_state.filtered_items.len() {
+                                // Only update hovered index, not selected index
+                                picker_state.hovered_index = Some(hovered_index);
+                            }
+                        } else {
+                            // Mouse is inside modal but not on any item
+                            picker_state.hovered_index = None;
+                        }
+                        
+                        return true; // Mouse is inside modal
+                    } else {
+                        // Mouse is outside modal
+                        picker_state.hovered_index = None;
+                    }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // First, get the information we need from the picker state
+                let click_info = if let crate::menu::MenuState::FilePicker(picker_state) = &self.menu_system.state {
+                    // Calculate file picker modal area (same as in UI draw method)
+                    let modal_width = 70u16.min(self.terminal_size.0.saturating_sub(4));
+                    let modal_height = 24u16.min(self.terminal_size.1.saturating_sub(4));
                     let modal_x = (self.terminal_size.0.saturating_sub(modal_width)) / 2;
                     let modal_y = (self.terminal_size.1.saturating_sub(modal_height)) / 2;
                     
@@ -801,42 +1023,120 @@ impl App {
                        mouse.row >= modal_y && mouse.row < modal_y + modal_height {
                         
                         // Calculate file list area (accounting for margin and search input)
-                        let list_start_y = modal_y + 1 + 1 + 1 + 1; // border + margin + search + separator
-                        let list_height = modal_height.saturating_sub(4); // subtract borders and other elements
+                        let list_start_y = modal_y + 1 + 1 + 1 + 1; // border + margin + current dir + search + separator
+                        let is_searching = !picker_state.search_query.is_empty();
+                        let items_per_entry = if is_searching { 2 } else { 1 };
+                        let list_height = modal_height.saturating_sub(5); // subtract borders and other elements
                         
-                        if mouse.row >= list_start_y && mouse.row < list_start_y + list_height {
+                        // Check if click is on scrollbar (rightmost column of file list area)
+                        let total_items = picker_state.filtered_items.len();
+                        let has_scrollbar = total_items * items_per_entry > list_height as usize;
+                        if has_scrollbar && mouse.column == modal_x + modal_width - 2 && // -2 for border and scrollbar position
+                           mouse.row >= list_start_y && mouse.row < list_start_y + list_height {
+                            // Handle scrollbar click - calculate new position and return it
+                            self.file_picker_scrollbar_dragging = true;
+                            let click_y = (mouse.row - list_start_y) as usize;
+                            let visible_items = (list_height as usize) / items_per_entry;
+                            
+                            let scrollbar_state = ScrollbarState::new(
+                                total_items,
+                                visible_items,
+                                picker_state.selected_index.saturating_sub(visible_items.saturating_sub(1)),
+                            );
+                            
+                            let new_position = scrollbar_state.click_position(list_height as usize, click_y);
+                            let new_selected_index = new_position.min(total_items.saturating_sub(1));
+                            
+                            Some((FileItem { path: PathBuf::new(), name: String::new(), is_dir: false, relative_path: String::new() }, false, new_selected_index)) // false means scrollbar click, not file selection
+                        } else if mouse.row >= list_start_y && mouse.row < list_start_y + list_height {
                             // Calculate which file was clicked
-                            let relative_y = mouse.row - list_start_y;
-                            let visible_files = list_height as usize;
-                            let start_index = if picker_state.selected_index >= visible_files {
-                                picker_state.selected_index.saturating_sub(visible_files - 1)
+                            let relative_y = (mouse.row - list_start_y) as usize;
+                            let item_index = relative_y / items_per_entry;
+                            let visible_items = (list_height as usize) / items_per_entry;
+                            
+                            let start_index = if picker_state.selected_index >= visible_items {
+                                picker_state.selected_index.saturating_sub(visible_items - 1)
                             } else {
                                 0
                             };
                             
-                            let clicked_file_index = start_index + relative_y as usize;
+                            let clicked_file_index = start_index + item_index;
                             
-                            if clicked_file_index < picker_state.filtered_files.len() {
-                                // Open the clicked file
-                                let selected_file = &picker_state.filtered_files[clicked_file_index];
-                                if let Ok(content) = std::fs::read_to_string(selected_file) {
-                                    let mut new_tab = crate::tab::Tab::new(
-                                        selected_file.file_name()
-                                            .and_then(|name| name.to_str())
-                                            .unwrap_or("untitled")
-                                            .to_string()
-                                    );
-                                    new_tab.path = Some(selected_file.clone());
-                                    new_tab.buffer = crate::rope_buffer::RopeBuffer::from_str(&content);
-                                    self.tab_manager.add_tab(new_tab);
+                            if clicked_file_index < picker_state.filtered_items.len() {
+                                // Update selected_index to match the click
+                                let selected_item = picker_state.filtered_items[clicked_file_index].clone();
+                                Some((selected_item, true, clicked_file_index)) // true means valid click
+                            } else {
+                                Some((FileItem { path: PathBuf::new(), name: String::new(), is_dir: false, relative_path: String::new() }, false, 0)) // false means invalid click but inside modal
+                            }
+                        } else {
+                            Some((FileItem { path: PathBuf::new(), name: String::new(), is_dir: false, relative_path: String::new() }, false, 0)) // Click was inside modal but not on a file
+                        }
+                    } else {
+                        None // Click was outside modal
+                    }
+                } else {
+                    None
+                };
+                
+                // Now handle the click based on the information we collected
+                if let Some((selected_item, valid_click, clicked_index)) = click_info {
+                    // Always update selected_index (for both file clicks and scrollbar clicks)
+                    if let crate::menu::MenuState::FilePicker(picker_state) = &mut self.menu_system.state {
+                        picker_state.selected_index = clicked_index;
+                        picker_state.hovered_index = None; // Clear hover on click
+                    }
+                    
+                    if valid_click {
+                        // Only process file/directory selection for valid file clicks
+                        
+                        if selected_item.is_dir {
+                            // Handle directory click - enter the directory
+                            if let crate::menu::MenuState::FilePicker(picker_state) = &mut self.menu_system.state {
+                                picker_state.enter_directory(selected_item.path.clone());
+                            }
+                        } else {
+                            // Handle file click - open the file
+                            match std::fs::read(&selected_item.path) {
+                                Ok(bytes) => {
+                                    // Try to convert to string, if it fails show warning
+                                    match String::from_utf8(bytes) {
+                                        Ok(text) => {
+                                            // Valid text file - open it using from_file to set preview mode for markdown
+                                            let new_tab = crate::tab::Tab::from_file(selected_item.path.clone(), &text);
+                                            self.tab_manager.add_tab(new_tab);
+                                            self.menu_system.close();
+                                        }
+                                        Err(_) => {
+                                            // Binary file - show warning, don't open
+                                            let size = std::fs::metadata(&selected_item.path)
+                                                .map(|m| m.len())
+                                                .unwrap_or(0);
+                                            self.warning_message = Some(format!(
+                                                "Cannot open binary file '{}' ({} bytes)",
+                                                selected_item.name, size
+                                            ));
+                                            self.warning_selected_button = 0;
+                                            self.warning_is_info = true; // This is an info dialog, not a confirmation
+                                            // Close file picker but don't open the file
+                                            self.menu_system.close();
+                                        }
+                                    }
                                 }
-                                self.menu_system.close();
-                                return true;
+                                Err(e) => {
+                                    // Could not read file - show error warning
+                                    self.warning_message = Some(format!(
+                                        "Cannot open '{}': {}",
+                                        selected_item.name, e
+                                    ));
+                                    self.warning_selected_button = 0;
+                                    self.warning_is_info = true; // This is an info dialog
+                                    self.menu_system.close();
+                                }
                             }
                         }
-                        
-                        return true; // Click was inside modal, consume it
                     }
+                    return true; // Click was inside modal
                 }
             }
             _ => {}
@@ -850,26 +1150,66 @@ impl App {
         
         if let crate::menu::MenuState::FilePicker(picker_state) = &mut self.menu_system.state {
             match (key.code, key.modifiers) {
+                (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+                    // Handle Ctrl+Q to quit even when file picker is open
+                    self.menu_system.close();
+                    self.handle_quit();
+                }
                 (KeyCode::Esc, KeyModifiers::NONE) => {
                     // Close file picker
                     self.menu_system.close();
                 }
-                (KeyCode::Enter, KeyModifiers::NONE) => {
-                    // Open selected file
-                    if let Some(selected_file) = picker_state.get_selected_file() {
-                        if let Ok(content) = std::fs::read_to_string(selected_file) {
-                            let mut new_tab = crate::tab::Tab::new(
-                                selected_file.file_name()
-                                    .and_then(|name| name.to_str())
-                                    .unwrap_or("untitled")
-                                    .to_string()
-                            );
-                            new_tab.path = Some(selected_file.clone());
-                            new_tab.buffer = crate::rope_buffer::RopeBuffer::from_str(&content);
-                            self.tab_manager.add_tab(new_tab);
+                (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Right, KeyModifiers::NONE) => {
+                    // Enter directory or open file
+                    if let Some(selected_item) = picker_state.get_selected_item() {
+                        if selected_item.is_dir {
+                            // Enter directory
+                            picker_state.enter_directory(selected_item.path.clone());
+                        } else {
+                            // Open file
+                            match std::fs::read(&selected_item.path) {
+                                Ok(bytes) => {
+                                    // Try to convert to string, if it fails show warning
+                                    match String::from_utf8(bytes) {
+                                        Ok(text) => {
+                                            // Valid text file - open it using from_file to set preview mode for markdown
+                                            let new_tab = crate::tab::Tab::from_file(selected_item.path.clone(), &text);
+                                            self.tab_manager.add_tab(new_tab);
+                                            self.menu_system.close();
+                                        }
+                                        Err(_) => {
+                                            // Binary file - show warning, don't open
+                                            let size = std::fs::metadata(&selected_item.path)
+                                                .map(|m| m.len())
+                                                .unwrap_or(0);
+                                            self.warning_message = Some(format!(
+                                                "Cannot open binary file '{}' ({} bytes)",
+                                                selected_item.name, size
+                                            ));
+                                            self.warning_selected_button = 0;
+                                            self.warning_is_info = true; // This is an info dialog, not a confirmation
+                                            // Close file picker but don't open the file
+                                            self.menu_system.close();
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    // Could not read file - show error warning
+                                    self.warning_message = Some(format!(
+                                        "Cannot open '{}': {}",
+                                        selected_item.name, e
+                                    ));
+                                    self.warning_selected_button = 0;
+                                    self.warning_is_info = true; // This is an info dialog
+                                    self.menu_system.close();
+                                }
+                            }
                         }
                     }
-                    self.menu_system.close();
+                }
+                (KeyCode::Left, KeyModifiers::NONE) => {
+                    // Go up one directory
+                    picker_state.go_up();
                 }
                 (KeyCode::Up, KeyModifiers::NONE) => {
                     picker_state.move_selection_up();
@@ -878,9 +1218,14 @@ impl App {
                     picker_state.move_selection_down();
                 }
                 (KeyCode::Backspace, KeyModifiers::NONE) => {
-                    // Remove last character from search
-                    picker_state.search_query.pop();
-                    picker_state.update_filter();
+                    if picker_state.search_query.is_empty() {
+                        // If search is empty, go up directory
+                        picker_state.go_up();
+                    } else {
+                        // Remove last character from search
+                        picker_state.search_query.pop();
+                        picker_state.update_filter();
+                    }
                 }
                 (KeyCode::Char(c), KeyModifiers::NONE) => {
                     // Add character to search
@@ -891,6 +1236,64 @@ impl App {
                     // Ignore other keys
                 }
             }
+        }
+    }
+
+    fn handle_scrollbar_click(&mut self, mouse: MouseEvent) {
+        if let Some(tab) = self.tab_manager.active_tab_mut() {
+            let editor_height = (self.terminal_size.1 as usize).saturating_sub(2); // Tab bar + status bar
+            let click_y = (mouse.row as usize).saturating_sub(1); // Subtract tab bar
+            
+            let content_lines = if tab.preview_mode && tab.is_markdown() {
+                // For markdown preview, count the rendered lines
+                let content = tab.buffer.to_string();
+                let markdown_widget = crate::markdown_widget::MarkdownWidget::new(&content);
+                markdown_widget.parse_markdown().len()
+            } else {
+                // For normal editor, use buffer lines
+                tab.buffer.len_lines()
+            };
+            
+            // Create scrollbar state to calculate click position
+            let scrollbar_state = ScrollbarState::new(
+                content_lines,
+                editor_height,
+                tab.viewport_offset.0,
+            );
+            
+            // Calculate new scroll position based on click
+            let new_position = scrollbar_state.click_position(editor_height, click_y);
+            
+            // Update viewport offset
+            tab.viewport_offset.0 = new_position;
+        }
+    }
+
+    fn handle_file_picker_scrollbar_click(&mut self, mouse: MouseEvent) {
+        if let crate::menu::MenuState::FilePicker(picker_state) = &mut self.menu_system.state {
+            let _modal_width = 70u16.min(self.terminal_size.0.saturating_sub(4));
+            let modal_height = 24u16.min(self.terminal_size.1.saturating_sub(4));
+            let modal_y = (self.terminal_size.1.saturating_sub(modal_height)) / 2;
+            let list_start_y = modal_y + 1 + 1 + 1 + 1; // border + margin + current dir + search + separator
+            let is_searching = !picker_state.search_query.is_empty();
+            let items_per_entry = if is_searching { 2 } else { 1 };
+            let list_height = modal_height.saturating_sub(5); // subtract borders and other elements
+            
+            let click_y = (mouse.row - list_start_y) as usize;
+            let visible_items = (list_height as usize) / items_per_entry;
+            let total_items = picker_state.filtered_items.len();
+            
+            let scrollbar_state = ScrollbarState::new(
+                total_items,
+                visible_items,
+                picker_state.selected_index.saturating_sub(visible_items.saturating_sub(1)),
+            );
+            
+            let new_position = scrollbar_state.click_position(list_height as usize, click_y);
+            let new_selected_index = new_position.min(total_items.saturating_sub(1));
+            
+            picker_state.selected_index = new_selected_index;
+            picker_state.hovered_index = None;
         }
     }
 

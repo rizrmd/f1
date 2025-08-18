@@ -94,11 +94,11 @@ impl MenuComponent {
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD)
             } else if is_hovered {
-                // Hovered item - slightly lighter background
+                // Hovered item - slightly lighter background with bold text
                 Style::default()
                     .bg(Color::LightYellow)
                     .fg(Color::Black)
-                    .add_modifier(Modifier::UNDERLINED)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 // Normal item
                 Style::default()
