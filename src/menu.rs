@@ -83,6 +83,8 @@ impl MenuSystem {
                         .with_shortcut("Ctrl+G"),
                     MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                         .with_shortcut("Ctrl+P"),
+                    MenuItem::new("Quit", MenuAction::Custom("quit".to_string()))
+                        .with_shortcut("Ctrl+Q"),
                     MenuItem::new("Cancel", MenuAction::Close),
                 ];
                 let menu = MenuComponent::new(items)
@@ -101,6 +103,8 @@ impl MenuSystem {
                 .with_shortcut("Ctrl+G"),
             MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                 .with_shortcut("Ctrl+P"),
+            MenuItem::new("Quit", MenuAction::Custom("quit".to_string()))
+                .with_shortcut("Ctrl+Q"),
             MenuItem::new("Cancel", MenuAction::Close),
         ];
         let menu = MenuComponent::new(items)

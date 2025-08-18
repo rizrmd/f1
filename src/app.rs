@@ -133,6 +133,9 @@ impl App {
                             "close_other_tab" => {
                                 self.tab_manager.close_other_tabs();
                             }
+                            "quit" => {
+                                self.handle_quit();
+                            }
                             _ => {}
                         }
                     }
@@ -613,6 +616,47 @@ impl App {
         use crossterm::event::{MouseEventKind, MouseButton};
 
         match mouse.kind {
+            MouseEventKind::Moved => {
+                // Handle hover on menus
+                match &self.menu_system.state {
+                    crate::menu::MenuState::MainMenu(menu) => {
+                        let menu_area = ratatui::layout::Rect {
+                            x: 0,
+                            y: self.terminal_size.1.saturating_sub(menu.height + 1),
+                            width: menu.width,
+                            height: menu.height,
+                        };
+                        
+                        let hovered_item = menu.get_clicked_item(&menu_area, mouse.column, mouse.row);
+                        
+                        if let crate::menu::MenuState::MainMenu(menu) = &mut self.menu_system.state {
+                            menu.hovered_index = hovered_item;
+                        }
+                        return true;
+                    }
+                    crate::menu::MenuState::CurrentTabMenu(menu) => {
+                        let tab_index = self.tab_manager.active_index();
+                        let tab_x = self.get_tab_x_position_for_menu(tab_index);
+                        let menu_width = menu.width;
+                        let menu_height = menu.height;
+                        
+                        let menu_area = ratatui::layout::Rect {
+                            x: tab_x,
+                            y: 1,
+                            width: menu_width,
+                            height: menu_height,
+                        };
+                        
+                        let hovered_item = menu.get_clicked_item(&menu_area, mouse.column, mouse.row);
+                        
+                        if let crate::menu::MenuState::CurrentTabMenu(menu) = &mut self.menu_system.state {
+                            menu.hovered_index = hovered_item;
+                        }
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 // Check if click is on F1 menu button in status bar
                 if self.is_f1_button_clicked(mouse.column, mouse.row) {
@@ -637,6 +681,7 @@ impl App {
                                     match action.as_str() {
                                         "current_tab" => self.menu_system.open_current_tab_menu(),
                                         "open_file" => self.menu_system.open_file_picker(),
+                                        "quit" => self.handle_quit(),
                                         _ => {}
                                     }
                                 }

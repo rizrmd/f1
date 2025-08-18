@@ -23,6 +23,7 @@ pub enum MenuAction {
 pub struct MenuComponent {
     pub items: Vec<MenuItem>,
     pub selected_index: usize,
+    pub hovered_index: Option<usize>,
     pub width: u16,
     pub height: u16,
     pub background_color: Color,
@@ -38,6 +39,7 @@ impl MenuComponent {
         Self {
             items,
             selected_index: 0,
+            hovered_index: None,
             width: 30,
             height,
             background_color: Color::Yellow,
@@ -83,13 +85,22 @@ impl MenuComponent {
         let mut lines = Vec::new();
         for (i, item) in self.items.iter().enumerate() {
             let is_selected = i == self.selected_index;
+            let is_hovered = self.hovered_index == Some(i);
             
             let style = if is_selected {
+                // Selected item - white background
                 Style::default()
                     .bg(Color::White)
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD)
+            } else if is_hovered {
+                // Hovered item - slightly lighter background
+                Style::default()
+                    .bg(Color::LightYellow)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::UNDERLINED)
             } else {
+                // Normal item
                 Style::default()
                     .bg(self.background_color)
                     .fg(self.foreground_color)
