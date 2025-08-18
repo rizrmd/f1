@@ -15,7 +15,7 @@ impl StatusBar {
         Self {}
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, tab_manager: &TabManager) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, tab_manager: &TabManager, status_message: Option<&String>) {
         if let Some(tab) = tab_manager.active_tab() {
             let cursor_pos = format!(
                 " L{}:C{} ",
@@ -23,15 +23,20 @@ impl StatusBar {
                 tab.cursor.position.column
             );
 
-            let file_info = if let Some(path) = &tab.path {
-                format!(" {} ", path.display())
+            let status_text = if let Some(message) = status_message {
+                // Show temporary status message with warning styling
+                format!(" {} ", message)
             } else {
-                format!(" {} ", tab.name)
+                // Show normal file info
+                let file_info = if let Some(path) = &tab.path {
+                    format!(" {} ", path.display())
+                } else {
+                    format!(" {} ", tab.name)
+                };
+
+                let modified = if tab.modified { " [Modified] " } else { "" };
+                format!("{}{}", file_info, modified)
             };
-
-            let modified = if tab.modified { " [Modified] " } else { "" };
-
-            let status_text = format!("{}{}", file_info, modified);
 
             let f1_menu = " ☰ F1 ";
             
@@ -51,12 +56,23 @@ impl StatusBar {
                         .fg(Color::Black),
                 );
 
-            let middle_status = Paragraph::new(Line::from(vec![Span::raw(status_text)]))
-                .style(
-                    Style::default()
-                        .bg(Color::Rgb(40, 40, 40))
-                        .fg(Color::White),
-                );
+            let middle_status = if status_message.is_some() {
+                // Use warning text color but same background for status messages
+                Paragraph::new(Line::from(vec![Span::raw(status_text)]))
+                    .style(
+                        Style::default()
+                            .bg(Color::Rgb(40, 40, 40))
+                            .fg(Color::Yellow),
+                    )
+            } else {
+                // Use normal colors for file info
+                Paragraph::new(Line::from(vec![Span::raw(status_text)]))
+                    .style(
+                        Style::default()
+                            .bg(Color::Rgb(40, 40, 40))
+                            .fg(Color::White),
+                    )
+            };
 
             let right_status = Paragraph::new(Line::from(vec![Span::raw(cursor_pos)]))
                 .style(

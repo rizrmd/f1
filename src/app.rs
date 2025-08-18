@@ -8,6 +8,7 @@ use crate::tab::{Tab, TabManager};
 use crate::ui::{UI, ScrollbarState};
 use crate::cursor::Position;
 use crate::menu::{MenuSystem, FileItem};
+use crate::tree_view::TreeView;
 
 pub struct App {
     pub tab_manager: TabManager,
@@ -25,10 +26,27 @@ pub struct App {
     pub menu_system: MenuSystem,
     scrollbar_dragging: bool,
     file_picker_scrollbar_dragging: bool,
+    pub tree_view: Option<TreeView>,
+    pub sidebar_width: u16,
+    pub sidebar_resizing: bool,
+    pub focus_mode: FocusMode,
+    tree_scrollbar_dragging: bool,
+    pub status_message: Option<String>,
+    status_message_expires: Option<Instant>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FocusMode {
+    Editor,
+    TreeView,
 }
 
 impl App {
     pub fn new() -> Self {
+        // Initialize tree view with current working directory
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let tree_view = TreeView::new(current_dir, 30).ok();
+        
         Self {
             tab_manager: TabManager::new(),
             running: true,
@@ -45,6 +63,27 @@ impl App {
             menu_system: MenuSystem::new(),
             scrollbar_dragging: false,
             file_picker_scrollbar_dragging: false,
+            tree_view,
+            sidebar_width: 30,
+            sidebar_resizing: false,
+            focus_mode: FocusMode::Editor,
+            tree_scrollbar_dragging: false,
+            status_message: None,
+            status_message_expires: None,
+        }
+    }
+    
+    pub fn set_status_message(&mut self, message: String, duration: Duration) {
+        self.status_message = Some(message);
+        self.status_message_expires = Some(Instant::now() + duration);
+    }
+    
+    pub fn update_status_message(&mut self) {
+        if let Some(expires) = self.status_message_expires {
+            if Instant::now() > expires {
+                self.status_message = None;
+                self.status_message_expires = None;
+            }
         }
     }
 
@@ -55,12 +94,19 @@ impl App {
             EditorCommand::NewTab => {
                 let new_tab = Tab::new(format!("untitled-{}", self.tab_manager.len() + 1));
                 self.tab_manager.add_tab(new_tab);
+                self.expand_tree_to_current_file();
             }
             EditorCommand::CloseTab => {
                 self.handle_close_tab();
             }
-            EditorCommand::NextTab => self.tab_manager.next_tab(),
-            EditorCommand::PrevTab => self.tab_manager.prev_tab(),
+            EditorCommand::NextTab => {
+                self.tab_manager.next_tab();
+                self.expand_tree_to_current_file();
+            }
+            EditorCommand::PrevTab => {
+                self.tab_manager.prev_tab();
+                self.expand_tree_to_current_file();
+            }
             EditorCommand::PageUp => {
                 if let Some(tab) = self.tab_manager.active_tab_mut() {
                     tab.viewport_offset.0 = tab.viewport_offset.0.saturating_sub(10);
@@ -106,6 +152,18 @@ impl App {
             EditorCommand::TogglePreview => {
                 if let Some(tab) = self.tab_manager.active_tab_mut() {
                     tab.toggle_preview_mode();
+                }
+            }
+            EditorCommand::FocusTreeView => {
+                self.focus_mode = FocusMode::TreeView;
+                if let Some(tree_view) = &mut self.tree_view {
+                    tree_view.is_focused = true;
+                }
+            }
+            EditorCommand::FocusEditor => {
+                self.focus_mode = FocusMode::Editor;
+                if let Some(tree_view) = &mut self.tree_view {
+                    tree_view.is_focused = false;
                 }
             }
         }
@@ -187,7 +245,157 @@ impl App {
             }
         }
 
+        // Handle tree view navigation when focused
+        if self.focus_mode == FocusMode::TreeView {
+            if let Some(tree_view) = &mut self.tree_view {
+                match (key.code, key.modifiers) {
+                    // Tab to switch focus back to editor
+                    (KeyCode::Tab, KeyModifiers::NONE) => {
+                        self.handle_command(EditorCommand::FocusEditor);
+                        return;
+                    }
+                    // Escape to exit search mode or focus editor
+                    (KeyCode::Esc, KeyModifiers::NONE) => {
+                        if tree_view.is_searching {
+                            tree_view.stop_search();
+                        } else {
+                            self.handle_command(EditorCommand::FocusEditor);
+                        }
+                        return;
+                    }
+                    // Arrow keys for navigation
+                    (KeyCode::Up, KeyModifiers::NONE) => {
+                        tree_view.move_selection_up();
+                        let visible_height = self.terminal_size.1.saturating_sub(2) as usize; // Account for tab and status bars
+                        tree_view.update_scroll(visible_height);
+                        return;
+                    }
+                    (KeyCode::Down, KeyModifiers::NONE) => {
+                        tree_view.move_selection_down();
+                        let visible_height = self.terminal_size.1.saturating_sub(2) as usize;
+                        tree_view.update_scroll(visible_height);
+                        return;
+                    }
+                    // Enter or Right to expand/open
+                    (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Right, KeyModifiers::NONE) => {
+                        if let Some(selected_item) = tree_view.get_selected_item() {
+                            if selected_item.is_dir {
+                                let _ = tree_view.toggle_selected();
+                            } else {
+                                // Open file
+                                if let Ok(content) = std::fs::read_to_string(&selected_item.path) {
+                                    let new_tab = Tab::from_file(selected_item.path.clone(), &content);
+                                    self.tab_manager.add_tab(new_tab);
+                                    self.expand_tree_to_current_file();
+                                    self.handle_command(EditorCommand::FocusEditor);
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    // Left to collapse or go up
+                    (KeyCode::Left, KeyModifiers::NONE) => {
+                        if let Some(selected_item) = tree_view.get_selected_item() {
+                            if selected_item.is_dir {
+                                let _ = tree_view.toggle_selected();
+                            }
+                        }
+                        return;
+                    }
+                    // Backspace in search mode
+                    (KeyCode::Backspace, KeyModifiers::NONE) => {
+                        if tree_view.is_searching {
+                            tree_view.remove_search_char();
+                        }
+                        return;
+                    }
+                    // Any character starts search or adds to search
+                    (KeyCode::Char(c), KeyModifiers::NONE) => {
+                        if !tree_view.is_searching {
+                            tree_view.start_search();
+                        }
+                        tree_view.add_search_char(c);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Tab handling for focus switching when not in tree view
+        if self.focus_mode == FocusMode::Editor {
+            match (key.code, key.modifiers) {
+                (KeyCode::Tab, KeyModifiers::NONE) => {
+                    // Only switch to tree view if it exists
+                    if self.tree_view.is_some() {
+                        self.handle_command(EditorCommand::FocusTreeView);
+                        return;
+                    } else {
+                        // No tree view, insert tab in editor
+                        if let Some(tab) = self.tab_manager.active_tab_mut() {
+                            if tab.cursor.has_selection() {
+                                Self::delete_selection(&mut tab.buffer, &mut tab.cursor);
+                            }
+                            Self::insert_tab(&mut tab.buffer, &mut tab.cursor);
+                            tab.mark_modified();
+                        }
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let needs_viewport_update = if let Some(tab) = self.tab_manager.active_tab_mut() {
+            // In markdown preview mode, disable most editor commands except navigation
+            if tab.preview_mode && tab.is_markdown() {
+                // Only allow basic navigation and preview toggle commands
+                match (key.code, key.modifiers) {
+                    // Allow Ctrl+U to toggle preview mode
+                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                        tab.toggle_preview_mode();
+                        return;
+                    }
+                    // Allow basic scrolling movements (without selection)
+                    (KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right, KeyModifiers::NONE) => {
+                        // Allow cursor movement for potential future feature (like copy from preview)
+                        // But no actual editing or selection
+                        return;
+                    }
+                    // Allow non-editing control commands to pass through
+                    (KeyCode::Char('q'), KeyModifiers::CONTROL) |  // Quit
+                    (KeyCode::Char('p'), KeyModifiers::CONTROL) |  // Open file
+                    (KeyCode::Char('s'), KeyModifiers::CONTROL) |  // Save
+                    (KeyCode::Char('n'), KeyModifiers::CONTROL) |  // New tab
+                    (KeyCode::Char('w'), KeyModifiers::CONTROL) |  // Close tab
+                    (KeyCode::Tab, KeyModifiers::CONTROL) |        // Next tab
+                    (KeyCode::BackTab, KeyModifiers::NONE) |       // Previous tab
+                    (KeyCode::Char('g'), KeyModifiers::CONTROL) |  // Current tab menu
+                    (KeyCode::Esc, KeyModifiers::NONE) => {        // Escape
+                        // Let these commands pass through to normal handling
+                    }
+                    // Check for selection attempts and show warning
+                    (KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right, KeyModifiers::SHIFT) |
+                    (KeyCode::Char('a'), KeyModifiers::CONTROL) |
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) |
+                    (KeyCode::Char('x'), KeyModifiers::CONTROL) => {
+                        self.set_status_message(
+                            "Selection disabled in preview mode. Press Ctrl+U to edit.".to_string(),
+                            Duration::from_secs(3)
+                        );
+                        return;
+                    }
+                    // Block editing commands in preview mode
+                    _ => {
+                        self.set_status_message(
+                            "Editing disabled in preview mode. Press Ctrl+U to edit.".to_string(),
+                            Duration::from_secs(3)
+                        );
+                        return;
+                    }
+                }
+            }
+            
             let old_cursor_pos = tab.cursor.position.clone();
             
             // Check if this is a modification command that needs state saving
@@ -248,7 +456,12 @@ impl App {
                 return;
             }
             
-            // Handle scroll for editor
+            // Check if scroll is in tree view area first
+            if self.handle_mouse_on_tree_view(mouse) {
+                return;
+            }
+            
+            // Handle scroll for editor (only if not handled by tree view)
             self.handle_editor_scroll(mouse.kind);
             return;
         }
@@ -271,6 +484,16 @@ impl App {
             return;
         }
 
+        // Handle sidebar resize border first (highest priority)
+        if self.handle_sidebar_resize(mouse) {
+            return;
+        }
+
+        // Handle tree view mouse events
+        if self.handle_mouse_on_tree_view(mouse) {
+            return;
+        }
+
         self.handle_mouse_on_editor(mouse);
     }
 
@@ -278,7 +501,10 @@ impl App {
         // Update terminal size
         self.terminal_size = (frame.area().width, frame.area().height);
         
-        self.ui.draw(frame, &mut self.tab_manager, &self.warning_message, self.warning_selected_button, self.warning_is_info, &self.menu_system);
+        // Update status message (remove if expired)
+        self.update_status_message();
+        
+        self.ui.draw(frame, &mut self.tab_manager, &self.warning_message, self.warning_selected_button, self.warning_is_info, &self.menu_system, &self.tree_view, self.sidebar_width, &self.focus_mode, &self.status_message);
     }
 
     fn handle_quit(&mut self) {
@@ -496,6 +722,7 @@ impl App {
                         } else {
                             // Clicked on different tab - switch to it
                             self.tab_manager.set_active_index(clicked_tab);
+                            self.expand_tree_to_current_file();
                             return;
                         }
                     }
@@ -510,6 +737,18 @@ impl App {
                 } else {
                     false
                 };
+                
+                // Check if we're in markdown preview mode - disable selection if so
+                if let Some(tab) = self.tab_manager.active_tab() {
+                    if tab.preview_mode && tab.is_markdown() {
+                        // Show warning message and return
+                        self.set_status_message(
+                            "Selection disabled in preview mode. Press Ctrl+U to edit.".to_string(),
+                            Duration::from_secs(3)
+                        );
+                        return;
+                    }
+                }
                 
                 // Convert mouse coordinates to text position
                 if let Some(pos) = self.mouse_to_text_position(mouse.column, mouse.row, active_index) {
@@ -541,6 +780,17 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // Check if we're in markdown preview mode - disable selection if so
+                if let Some(tab) = self.tab_manager.active_tab() {
+                    if tab.preview_mode && tab.is_markdown() {
+                        self.set_status_message(
+                            "Selection disabled in preview mode. Press Ctrl+U to edit.".to_string(),
+                            Duration::from_secs(3)
+                        );
+                        return;
+                    }
+                }
+                
                 if self.mouse_selecting {
                     if let Some(pos) = self.mouse_to_text_position(mouse.column, mouse.row, active_index) {
                         if let Some(tab) = self.tab_manager.active_tab_mut() {
@@ -552,6 +802,14 @@ impl App {
                 // Note: If not mouse_selecting, we ignore drag (e.g., after double-click word selection)
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                // Check if we're in markdown preview mode - disable selection if so
+                if let Some(tab) = self.tab_manager.active_tab() {
+                    if tab.preview_mode && tab.is_markdown() {
+                        // Don't show message on mouse up to avoid spam
+                        return;
+                    }
+                }
+                
                 if self.mouse_selecting {
                     if let Some(tab) = self.tab_manager.active_tab_mut() {
                         // If we didn't actually drag (selection start == current position), clear selection
@@ -874,18 +1132,9 @@ impl App {
     }
 
     fn get_tab_x_position_for_menu(&self, target_tab_index: usize) -> u16 {
-        let mut x_pos = 0u16;
-        
-        for (i, tab) in self.tab_manager.tabs().iter().enumerate() {
-            if i == target_tab_index {
-                return x_pos;
-            }
-            // Calculate tab width: " " + tab_name + " " = tab_name.len() + 2
-            let tab_width = tab.display_name().len() + 2;
-            x_pos += tab_width as u16;
-        }
-        
-        x_pos
+        // Use the terminal width for calculation
+        let available_width = self.terminal_size.0 as usize;
+        self.ui.tab_bar.get_tab_x_position(&self.tab_manager, target_tab_index, available_width)
     }
 
     fn is_ctrl_n_hint_clicked(&self, mouse_x: u16) -> bool {
@@ -1297,5 +1546,199 @@ impl App {
         }
     }
 
+    fn delete_selection(buffer: &mut crate::rope_buffer::RopeBuffer, cursor: &mut crate::cursor::Cursor) {
+        if let Some((start, end)) = cursor.get_selection() {
+            let start_idx = buffer.line_to_char(start.line) + start.column.min(buffer.get_line_text(start.line).len());
+            let end_idx = buffer.line_to_char(end.line) + end.column.min(buffer.get_line_text(end.line).len());
+            
+            if end_idx > start_idx {
+                buffer.remove(start_idx..end_idx);
+                cursor.position = start;
+            }
+        }
+        cursor.clear_selection();
+    }
+
+    fn insert_tab(buffer: &mut crate::rope_buffer::RopeBuffer, cursor: &mut crate::cursor::Cursor) {
+        let char_idx = cursor.to_char_index(buffer);
+        buffer.insert_char(char_idx, '\t');
+        cursor.move_right(buffer);
+    }
+
+    fn expand_tree_to_current_file(&mut self) {
+        if let (Some(tree_view), Some(current_tab)) = (&mut self.tree_view, self.tab_manager.active_tab()) {
+            if let Some(file_path) = &current_tab.path {
+                let _ = tree_view.expand_to_file(file_path);
+            }
+        }
+    }
+
+    fn handle_sidebar_resize(&mut self, mouse: MouseEvent) -> bool {
+        use crossterm::event::{MouseEventKind, MouseButton};
+        
+        if self.tree_view.is_none() {
+            return false;
+        }
+        
+        let tree_area_start_y = 1; // After tab bar
+        let tree_area_end_y = self.terminal_size.1.saturating_sub(1); // Before status bar
+        let border_column = self.sidebar_width; // The border is at this column
+        
+        // Check if we're currently resizing - if so, handle all mouse events
+        if self.sidebar_resizing {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    // Resize sidebar - the border should be at the mouse position
+                    let new_width = mouse.column.max(15).min(self.terminal_size.0 / 2);
+                    self.sidebar_width = new_width;
+                    if let Some(tree_view) = &mut self.tree_view {
+                        tree_view.resize(self.sidebar_width);
+                    }
+                    return true;
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.sidebar_resizing = false;
+                    return true;
+                }
+                _ => return true, // Consume all events during resize
+            }
+        }
+        
+        // Check if mouse is on the resize border
+        if mouse.column == border_column && 
+           mouse.row >= tree_area_start_y && 
+           mouse.row < tree_area_end_y {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.sidebar_resizing = true;
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        
+        false
+    }
+
+    fn handle_mouse_on_tree_view(&mut self, mouse: MouseEvent) -> bool {
+        use crossterm::event::{MouseEventKind, MouseButton};
+        
+        if self.tree_view.is_none() {
+            return false;
+        }
+        
+        // Check if mouse is within tree view area (excluding the border)
+        let tree_area_width = self.sidebar_width;
+        let tree_area_start_y = 1; // After tab bar
+        let tree_area_end_y = self.terminal_size.1.saturating_sub(1); // Before status bar
+        
+        // For scroll events, be more lenient with position detection since scroll position might not be accurate
+        let is_in_tree_area = if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+            // For scroll events, prioritize tree view if mouse is anywhere in the tree area
+            mouse.column <= tree_area_width && mouse.row >= tree_area_start_y && mouse.row < tree_area_end_y
+        } else {
+            // For other events, use exact positioning (excluding border)
+            mouse.column < tree_area_width && mouse.row >= tree_area_start_y && mouse.row < tree_area_end_y
+        };
+        
+        if !is_in_tree_area {
+            return false; // Mouse not in tree view area
+        }
+        
+        match mouse.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // ALWAYS handle scroll events in tree view area, regardless of tree_view state
+                if let Some(tree_view) = &mut self.tree_view {
+                    // Handle scrolling by adjusting scroll offset directly
+                    let scroll_amount = 3;
+                    let visible_height = (tree_area_end_y - tree_area_start_y) as usize;
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            tree_view.scroll_up(scroll_amount);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            tree_view.scroll_down(scroll_amount, visible_height);
+                        }
+                        _ => {}
+                    }
+                }
+                // Always return true for scroll events in tree area to prevent editor from handling them
+                return true;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(tree_view) = &mut self.tree_view {
+                    // Check if click is on scrollbar
+                    if mouse.column == tree_area_width.saturating_sub(1) {
+                        self.tree_scrollbar_dragging = true;
+                        let visible_height = (tree_area_end_y - tree_area_start_y) as usize;
+                        let click_y = (mouse.row - tree_area_start_y) as usize;
+                        tree_view.handle_scrollbar_click(visible_height, click_y);
+                        return true;
+                    }
+                    
+                    // Calculate which item was clicked first
+                    let item_y = mouse.row - tree_area_start_y;
+                    let visible_items = tree_view.get_visible_items();
+                    let clicked_index = tree_view.scroll_offset + item_y as usize;
+                    
+                    if clicked_index < visible_items.len() {
+                        tree_view.selected_index = clicked_index;
+                        
+                        // Double-click detection for opening files/expanding directories
+                        let now = std::time::Instant::now();
+                        let is_double_click = if let Some(last_time) = self.last_click_time {
+                            now.duration_since(last_time) < std::time::Duration::from_millis(500)
+                        } else {
+                            false
+                        };
+                        
+                        if is_double_click {
+                            if let Some(selected_item) = tree_view.get_selected_item() {
+                                if selected_item.is_dir {
+                                    let _ = tree_view.toggle_selected();
+                                } else {
+                                    // Open file
+                                    let file_path = selected_item.path.clone();
+                                    let _ = tree_view; // Release borrow
+                                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                                        let new_tab = Tab::from_file(file_path, &content);
+                                        self.tab_manager.add_tab(new_tab);
+                                        self.expand_tree_to_current_file();
+                                        self.handle_command(EditorCommand::FocusEditor);
+                                    }
+                                }
+                            }
+                            self.last_click_time = None; // Reset to prevent triple-click
+                        } else {
+                            self.last_click_time = Some(now);
+                        }
+                    }
+                }
+                
+                // Focus tree view on click (after handling the click)
+                self.handle_command(EditorCommand::FocusTreeView);
+                return true;
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.tree_scrollbar_dragging {
+                    if let Some(tree_view) = &mut self.tree_view {
+                        let visible_height = (tree_area_end_y - tree_area_start_y) as usize;
+                        let click_y = (mouse.row - tree_area_start_y) as usize;
+                        tree_view.handle_scrollbar_click(visible_height, click_y);
+                    }
+                    return true;
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.tree_scrollbar_dragging {
+                    self.tree_scrollbar_dragging = false;
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        
+        true // Mouse was in tree view area
+    }
 
 }

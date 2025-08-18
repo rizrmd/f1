@@ -239,11 +239,8 @@ pub fn handle_key_event(
             Some(EditorCommand::Modified)
         }
         KeyCode::Tab if !has_ctrl => {
-            if cursor.has_selection() {
-                delete_selection(buffer, cursor);
-            }
-            insert_tab(buffer, cursor);
-            Some(EditorCommand::Modified)
+            // Let the app handle Tab for focus switching - only insert tab if not handled by app
+            None
         }
         
         // Character insertion - ignore if Alt/Option is pressed (prevents 'b' from Alt+Arrow)
@@ -265,6 +262,7 @@ fn insert_char(buffer: &mut RopeBuffer, cursor: &mut Cursor, ch: char) {
     cursor.move_right(buffer);
 }
 
+#[allow(dead_code)]
 fn insert_tab(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
     let char_idx = cursor.to_char_index(buffer);
     buffer.insert(char_idx, "    ");
@@ -385,4 +383,6 @@ pub enum EditorCommand {
     Undo,
     Redo,
     TogglePreview,
+    FocusTreeView,
+    FocusEditor,
 }

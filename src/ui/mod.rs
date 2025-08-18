@@ -1,7 +1,7 @@
 mod status_bar;
 mod tab_bar;
 mod menu_component;
-mod scrollbar;
+pub mod scrollbar;
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -14,6 +14,9 @@ use ratatui::{
 use crate::editor_widget::EditorWidget;
 use crate::tab::TabManager;
 use crate::menu::{MenuSystem, MenuState};
+use crate::tree_view::TreeView;
+use crate::app::FocusMode;
+use crate::file_icons;
 
 use self::status_bar::StatusBar;
 use self::tab_bar::TabBar;
@@ -21,7 +24,7 @@ pub use self::menu_component::{MenuComponent, MenuItem, MenuAction};
 pub use self::scrollbar::{VerticalScrollbar, ScrollbarState};
 
 pub struct UI {
-    tab_bar: TabBar,
+    pub tab_bar: TabBar,
     status_bar: StatusBar,
 }
 
@@ -33,14 +36,14 @@ impl UI {
         }
     }
 
-    pub fn draw(&mut self, frame: &mut Frame, tab_manager: &mut TabManager, warning_message: &Option<String>, selected_button: usize, is_info: bool, menu_system: &MenuSystem) {
+    pub fn draw(&mut self, frame: &mut Frame, tab_manager: &mut TabManager, warning_message: &Option<String>, selected_button: usize, is_info: bool, menu_system: &MenuSystem, tree_view: &Option<TreeView>, sidebar_width: u16, focus_mode: &FocusMode, status_message: &Option<String>) {
         let size = frame.area();
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1), // Tab bar (reduced from 2 to 1)
-                Constraint::Min(0),    // Editor content
+                Constraint::Min(0),    // Main content (tree view + editor)
                 Constraint::Length(1), // Status bar
             ])
             .split(size);
@@ -48,26 +51,73 @@ impl UI {
         // Render tab bar
         self.tab_bar.draw(frame, chunks[0], tab_manager);
 
-        // Render editor content or markdown preview
-        if let Some(tab) = tab_manager.active_tab_mut() {
-            if tab.preview_mode && tab.is_markdown() {
-                // Render markdown preview
-                let content = tab.buffer.to_string();
-                let preview = crate::markdown_widget::MarkdownWidget::new(&content)
-                    .viewport_offset(tab.viewport_offset);
-                frame.render_widget(preview, chunks[1]);
-            } else {
-                // Render normal editor
-                let editor = EditorWidget::new(&tab.buffer, &tab.cursor)
-                    .viewport_offset(tab.viewport_offset)
-                    .show_line_numbers(true)
-                    .focused(true);
-                frame.render_widget(editor, chunks[1]);
+        // Split main content area into sidebar and editor if tree view exists
+        let main_area = chunks[1];
+        if let Some(tree_view) = tree_view {
+            // Create horizontal layout with tree view, border, and editor
+            let horizontal_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(sidebar_width), // Tree view sidebar
+                    Constraint::Length(1),             // Vertical border
+                    Constraint::Min(0),                 // Editor content
+                ])
+                .split(main_area);
+
+            // Render tree view
+            frame.render_widget(tree_view, horizontal_chunks[0]);
+
+            // Draw dimmed vertical border in the dedicated border area
+            let border_area = horizontal_chunks[1];
+            for y in border_area.y..border_area.y + border_area.height {
+                if border_area.x < size.width {
+                    frame.buffer_mut()[(border_area.x, y)]
+                        .set_symbol("│")
+                        .set_style(Style::default().fg(Color::DarkGray));
+                }
+            }
+
+            // Render editor content in the remaining space
+            let editor_area = horizontal_chunks[2];
+            if let Some(tab) = tab_manager.active_tab_mut() {
+                let is_editor_focused = matches!(focus_mode, FocusMode::Editor);
+                if tab.preview_mode && tab.is_markdown() {
+                    // Render markdown preview
+                    let content = tab.buffer.to_string();
+                    let preview = crate::markdown_widget::MarkdownWidget::new(&content)
+                        .viewport_offset(tab.viewport_offset);
+                    frame.render_widget(preview, editor_area);
+                } else {
+                    // Render normal editor
+                    let editor = EditorWidget::new(&tab.buffer, &tab.cursor)
+                        .viewport_offset(tab.viewport_offset)
+                        .show_line_numbers(true)
+                        .focused(is_editor_focused);
+                    frame.render_widget(editor, editor_area);
+                }
+            }
+        } else {
+            // No tree view, render editor in full main area
+            if let Some(tab) = tab_manager.active_tab_mut() {
+                if tab.preview_mode && tab.is_markdown() {
+                    // Render markdown preview
+                    let content = tab.buffer.to_string();
+                    let preview = crate::markdown_widget::MarkdownWidget::new(&content)
+                        .viewport_offset(tab.viewport_offset);
+                    frame.render_widget(preview, main_area);
+                } else {
+                    // Render normal editor
+                    let editor = EditorWidget::new(&tab.buffer, &tab.cursor)
+                        .viewport_offset(tab.viewport_offset)
+                        .show_line_numbers(true)
+                        .focused(true);
+                    frame.render_widget(editor, main_area);
+                }
             }
         }
 
         // Render status bar
-        self.status_bar.draw(frame, chunks[2], tab_manager);
+        self.status_bar.draw(frame, chunks[2], tab_manager, status_message.as_ref());
 
         // Render warning dialog if present
         if let Some(message) = warning_message {
@@ -87,7 +137,8 @@ impl UI {
             }
             MenuState::CurrentTabMenu(menu) => {
                 let tab_index = tab_manager.active_index();
-                let tab_x = self.tab_bar.get_tab_x_position(tab_manager, tab_index);
+                let available_width = frame.area().width as usize;
+                let tab_x = self.tab_bar.get_tab_x_position(tab_manager, tab_index, available_width);
                 let menu_area = Rect {
                     x: tab_x,
                     y: 1, // Directly below tab bar
@@ -342,31 +393,17 @@ impl UI {
                 Style::default().fg(Color::DarkGray)
             };
 
-            // Icon based on type
+            // Icon based on type using the modular icon system
             let icon = if item.name == ".." {
                 "⬆️"
             } else if item.is_dir {
-                "📁"
+                file_icons::get_directory_icon(false) // Always show closed folder in file picker
             } else {
-                // File icon based on extension
-                match item.path.extension().and_then(|e| e.to_str()) {
-                    Some("rs") => "🦀",
-                    Some("toml") => "⚙️",
-                    Some("md") => "📝",
-                    Some("txt") => "📄",
-                    Some("json") => "📋",
-                    Some("yml") | Some("yaml") => "📋",
-                    Some("sh") => "🔧",
-                    Some("js") | Some("ts") => "📜",
-                    Some("py") => "🐍",
-                    Some("go") => "🐹",
-                    Some("cpp") | Some("c") | Some("h") => "⚡",
-                    _ => "📄",
-                }
+                file_icons::get_file_icon(&item.path)
             };
             
             // First line: icon and name (padded to content area width)
-            let name_line = format!(" {} {}", icon, item.name);
+            let name_line = format!(" {}  {}", icon, item.name);
             let content_width = (file_content_area.width as usize).saturating_sub(2);
             let padded_name_line = format!("{:<width$}", name_line, width = content_width);
             file_lines.push(Line::from(Span::styled(padded_name_line, style)));

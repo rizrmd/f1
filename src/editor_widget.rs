@@ -166,6 +166,15 @@ impl<'a> Widget for EditorWidget<'a> {
         let start_line = self.viewport_offset.0;
         let end_line = (start_line + visible_lines).min(self.buffer.len_lines());
         
+        // Clear the entire inner area first to prevent artifacts
+        for y in inner.y..inner.y + inner.height {
+            for x in inner.x..inner.x + inner.width {
+                buf[(x, y)]
+                    .set_symbol(" ")
+                    .set_style(Style::default());
+            }
+        }
+        
         if self.show_line_numbers && line_number_width > 0 {
             let mut line_numbers = Vec::new();
             for line_idx in start_line..end_line {

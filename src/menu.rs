@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use crate::ui::{MenuComponent, MenuItem, MenuAction};
+use crate::gitignore::GitIgnore;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuState {
@@ -17,6 +18,7 @@ pub struct FilePickerState {
     pub hovered_index: Option<usize>,
     pub current_dir: PathBuf,
     pub all_items: Vec<FileItem>,
+    gitignore: GitIgnore,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +32,21 @@ pub struct FileItem {
 impl FilePickerState {
     pub fn new() -> Self {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        
+        // Create a temporary state to use the find_repo_root method
+        let temp_state = Self {
+            search_query: String::new(),
+            filtered_items: Vec::new(),
+            selected_index: 0,
+            hovered_index: None,
+            current_dir: current_dir.clone(),
+            all_items: Vec::new(),
+            gitignore: GitIgnore::new(current_dir.clone()), // Temporary
+        };
+        
+        let repo_root = temp_state.find_repo_root(&current_dir);
+        let gitignore = GitIgnore::new(repo_root);
+        
         let mut state = Self {
             search_query: String::new(),
             filtered_items: Vec::new(),
@@ -37,6 +54,7 @@ impl FilePickerState {
             hovered_index: None,
             current_dir: current_dir.clone(),
             all_items: Vec::new(),
+            gitignore,
         };
         state.load_current_directory();
         state
@@ -69,6 +87,11 @@ impl FilePickerState {
                 
                 // Skip hidden files (starting with .)
                 if name.starts_with('.') && name != ".." {
+                    continue;
+                }
+                
+                // Skip gitignored files
+                if self.gitignore.is_ignored(&path) {
                     continue;
                 }
                 
@@ -165,10 +188,29 @@ impl FilePickerState {
     }
     
     pub fn enter_directory(&mut self, dir: PathBuf) {
-        self.current_dir = dir;
+        self.current_dir = dir.clone();
         self.search_query.clear();
         self.hovered_index = None; // Clear hover when changing directory
+        
+        // Update gitignore for the new directory (find repo root)
+        self.gitignore = GitIgnore::new(self.find_repo_root(&dir));
+        
         self.load_current_directory();
+    }
+    
+    fn find_repo_root(&self, path: &PathBuf) -> PathBuf {
+        let mut current = path.clone();
+        loop {
+            if current.join(".git").exists() {
+                return current;
+            }
+            if let Some(parent) = current.parent() {
+                current = parent.to_path_buf();
+            } else {
+                // If no .git found, use the current directory
+                return path.clone();
+            }
+        }
     }
     
     pub fn go_up(&mut self) {
@@ -319,8 +361,7 @@ impl MenuSystem {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 })
             };
-            picker_state.current_dir = dir;
-            picker_state.load_current_directory();
+            picker_state.enter_directory(dir);
         }
         
         self.state = MenuState::FilePicker(picker_state);

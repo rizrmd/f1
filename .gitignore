@@ -1,1 +1,5 @@
-/target
+# Should be ignored
+target/
+*.log
+temp_*
+test_dir/ignored_file.txt

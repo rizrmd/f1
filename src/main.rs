@@ -1,11 +1,14 @@
 mod app;
 mod cursor;
 mod editor_widget;
+mod file_icons;
+mod gitignore;
 mod keyboard;
 mod markdown_widget;
 mod menu;
 mod rope_buffer;
 mod tab;
+mod tree_view;
 mod ui;
 
 

@@ -383,7 +383,7 @@ impl<'a> MarkdownWidget<'a> {
         
         // Ensure minimum width and add padding
         for width in &mut col_widths {
-            *width = (*width + 2).max(8); // Minimum 8 chars, +2 for padding
+            *width = (*width + 4).max(10); // Minimum 10 chars, +4 for padding (space + content + space)
         }
         
         // Render table
@@ -435,30 +435,44 @@ impl<'a> MarkdownWidget<'a> {
             // Calculate actual display length (without markdown formatting characters)
             let display_len = self.calculate_display_length(cell);
             
-            // Add left padding
-            spans.push(Span::styled(" ", Style::default()));
+            // Create padded cell content with fixed width
+            let padded_content = if display_len >= width.saturating_sub(2) {
+                // Truncate if too long, keeping some padding
+                let max_len = width.saturating_sub(3);
+                let truncated = if cell.len() > max_len {
+                    &cell[..max_len]
+                } else {
+                    cell
+                };
+                format!(" {} ", truncated)
+            } else {
+                // Pad to exact width with left alignment
+                let content_width = width.saturating_sub(2);
+                format!(" {:<width$} ", cell, width = content_width)
+            };
             
-            // Check if cell contains inline formatting
+            // Apply formatting to the cell content
             if cell.contains("**") || cell.contains("*") || cell.contains("`") {
-                // Apply inline formatting to cell content
+                // For formatted content, we need to handle it differently
+                spans.push(Span::styled(" ", Style::default()));
                 let formatted_line = self.parse_inline_formatting(cell);
                 spans.extend(formatted_line.spans);
+                
+                // Calculate how much padding we need after the formatted content
+                let remaining_width = width.saturating_sub(display_len + 2);
+                if remaining_width > 0 {
+                    spans.push(Span::styled(" ".repeat(remaining_width + 1), Style::default()));
+                } else {
+                    spans.push(Span::styled(" ", Style::default()));
+                }
             } else {
-                // Regular cell content
+                // Regular cell content with proper padding
                 let style = if is_header {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
-                spans.push(Span::styled(cell.clone(), style));
-            }
-            
-            // Add right padding to reach column width (using display length)
-            let padding_needed = width.saturating_sub(display_len + 2); // -2 for left/right padding
-            if padding_needed > 0 {
-                spans.push(Span::styled(" ".repeat(padding_needed + 1), Style::default()));
-            } else {
-                spans.push(Span::styled(" ", Style::default()));
+                spans.push(Span::styled(padded_content, style));
             }
             
             spans.push(Span::styled("│", Style::default().fg(Color::Blue)));
@@ -468,7 +482,7 @@ impl<'a> MarkdownWidget<'a> {
         for i in row.len()..col_widths.len() {
             let width = col_widths[i];
             let empty_cell = format!(" {:<width$} ", "", width = width.saturating_sub(2));
-            spans.push(Span::styled(empty_cell, Style::default().fg(Color::White)));
+            spans.push(Span::styled(empty_cell, Style::default()));
             spans.push(Span::styled("│", Style::default().fg(Color::Blue)));
         }
         
