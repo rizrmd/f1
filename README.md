@@ -19,7 +19,7 @@ A fast, modern terminal text editor built with Rust featuring mouse support, tab
 - Rust 1.70 or higher
 - Terminal with mouse support
 
-### One-liner Install
+### Quick Install
 
 **macOS/Linux:**
 ```bash
@@ -31,10 +31,19 @@ curl -sSL https://github.com/rizrmd/f1/releases/latest/download/install.sh | sh
 irm https://github.com/rizrmd/f1/releases/latest/download/install.ps1 | iex
 ```
 
-**Cargo (All Platforms):**
+**Install from Source (All Platforms):**
 ```bash
 cargo install --git https://github.com/rizrmd/f1
 ```
+
+### Download Binaries
+
+Pre-built binaries are available for:
+- Linux (x86_64, ARM64)
+- macOS (Intel, Apple Silicon)  
+- Windows (x86_64)
+
+Download from [Releases](https://github.com/rizrmd/f1/releases)
 
 ### Build from Source
 

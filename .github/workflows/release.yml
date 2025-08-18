@@ -1,0 +1,225 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build - ${{ matrix.platform.name }}
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      matrix:
+        platform:
+          - name: Linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: f1
+            archive: tar.gz
+          
+          - name: Linux-ARM64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: f1
+            archive: tar.gz
+            use-cross: true
+          
+          - name: macOS-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            binary: f1
+            archive: tar.gz
+          
+          - name: macOS-ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            binary: f1
+            archive: tar.gz
+          
+          - name: Windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: f1.exe
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.platform.target }}
+      
+      - name: Install cross
+        if: matrix.platform.use-cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      
+      - name: Build binary
+        run: |
+          if [ "${{ matrix.platform.use-cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.platform.target }}
+          else
+            cargo build --release --target ${{ matrix.platform.target }}
+          fi
+        shell: bash
+      
+      - name: Package (tar.gz)
+        if: matrix.platform.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.platform.target }}/release
+          tar czf ../../../f1-${{ matrix.platform.name }}.tar.gz ${{ matrix.platform.binary }}
+          cd -
+      
+      - name: Package (zip)
+        if: matrix.platform.archive == 'zip'
+        run: |
+          cd target/${{ matrix.platform.target }}/release
+          7z a ../../../f1-${{ matrix.platform.name }}.zip ${{ matrix.platform.binary }}
+          cd -
+        shell: bash
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: f1-${{ matrix.platform.name }}
+          path: f1-${{ matrix.platform.name }}.${{ matrix.platform.archive }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Create install scripts
+        run: |
+          # Create Unix install script
+          cat > install.sh << 'EOF'
+          #!/bin/sh
+          set -e
+          
+          OS="$(uname -s)"
+          ARCH="$(uname -m)"
+          
+          case "$OS" in
+            Linux*)
+              case "$ARCH" in
+                x86_64) PLATFORM="Linux-x86_64" ;;
+                aarch64) PLATFORM="Linux-ARM64" ;;
+                *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+              esac
+              ;;
+            Darwin*)
+              case "$ARCH" in
+                x86_64) PLATFORM="macOS-x86_64" ;;
+                arm64) PLATFORM="macOS-ARM64" ;;
+                *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+              esac
+              ;;
+            *) echo "Unsupported OS: $OS"; exit 1 ;;
+          esac
+          
+          URL="https://github.com/rizrmd/f1/releases/latest/download/f1-${PLATFORM}.tar.gz"
+          
+          echo "Downloading F1 for $PLATFORM..."
+          curl -sSL "$URL" | tar xz
+          
+          echo "Installing F1..."
+          if [ -w "/usr/local/bin" ]; then
+            mv f1 /usr/local/bin/
+          else
+            sudo mv f1 /usr/local/bin/
+          fi
+          
+          echo "F1 installed successfully!"
+          f1 --version
+          EOF
+          
+          # Create Windows install script
+          cat > install.ps1 << 'EOF'
+          $ErrorActionPreference = "Stop"
+          
+          $ARCH = [System.Environment]::Is64BitOperatingSystem
+          if (-not $ARCH) {
+            Write-Error "32-bit Windows is not supported"
+            exit 1
+          }
+          
+          $URL = "https://github.com/rizrmd/f1/releases/latest/download/f1-Windows-x86_64.zip"
+          $TEMP = "$env:TEMP\f1-install"
+          $ZIP = "$TEMP\f1.zip"
+          
+          Write-Host "Downloading F1 for Windows..." -ForegroundColor Green
+          New-Item -ItemType Directory -Force -Path $TEMP | Out-Null
+          Invoke-WebRequest -Uri $URL -OutFile $ZIP
+          
+          Write-Host "Extracting F1..." -ForegroundColor Green
+          Expand-Archive -Path $ZIP -DestinationPath $TEMP -Force
+          
+          Write-Host "Installing F1..." -ForegroundColor Green
+          $DEST = "$env:LOCALAPPDATA\Programs\f1"
+          New-Item -ItemType Directory -Force -Path $DEST | Out-Null
+          Move-Item -Path "$TEMP\f1.exe" -Destination "$DEST\f1.exe" -Force
+          
+          # Add to PATH if not already there
+          $PATH = [Environment]::GetEnvironmentVariable("PATH", "User")
+          if ($PATH -notlike "*$DEST*") {
+            [Environment]::SetEnvironmentVariable("PATH", "$PATH;$DEST", "User")
+            $env:PATH = "$env:PATH;$DEST"
+            Write-Host "Added F1 to PATH" -ForegroundColor Green
+          }
+          
+          Remove-Item -Path $TEMP -Recurse -Force
+          
+          Write-Host "F1 installed successfully!" -ForegroundColor Green
+          Write-Host "Restart your terminal to use 'f1' command" -ForegroundColor Yellow
+          EOF
+          
+          chmod +x install.sh
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: F1 Editor ${{ github.ref_name }}
+          body: |
+            ## Installation
+            
+            ### Quick Install
+            
+            **macOS/Linux:**
+            ```bash
+            curl -sSL https://github.com/rizrmd/f1/releases/latest/download/install.sh | sh
+            ```
+            
+            **Windows (PowerShell):**
+            ```powershell
+            irm https://github.com/rizrmd/f1/releases/latest/download/install.ps1 | iex
+            ```
+            
+            ### Manual Download
+            
+            Download the appropriate archive for your platform below and extract the binary.
+            
+            ## What's New
+            
+            See [CHANGELOG.md](https://github.com/rizrmd/f1/blob/master/CHANGELOG.md) for details.
+          files: |
+            artifacts/**/f1-*.tar.gz
+            artifacts/**/f1-*.zip
+            install.sh
+            install.ps1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
