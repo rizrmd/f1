@@ -1,0 +1,12 @@
+[package]
+name = "f1"
+version = "0.1.0"
+edition = "2021"
+default-run = "f1"
+
+[dependencies]
+ratatui = "0.28"
+crossterm = "0.28"
+ropey = "1.6"
+unicode-width = "0.1"
+unicode-segmentation = "1.11"
