@@ -39,7 +39,7 @@ impl RopeBuffer {
         self.rope.len_lines()
     }
 
-    pub fn line(&self, line_idx: usize) -> ropey::RopeSlice {
+    pub fn line(&self, line_idx: usize) -> ropey::RopeSlice<'_> {
         self.rope.line(line_idx)
     }
 
@@ -62,7 +62,7 @@ impl RopeBuffer {
         }
     }
 
-    pub fn slice(&self, range: Range<usize>) -> ropey::RopeSlice {
+    pub fn slice(&self, range: Range<usize>) -> ropey::RopeSlice<'_> {
         self.rope.slice(range)
     }
 

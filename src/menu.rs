@@ -400,12 +400,16 @@ impl MenuSystem {
             items.push(MenuItem::new("New Folder", MenuAction::Custom("new_folder".to_string())));
         }
         
-        items.push(MenuItem::new("Rename", MenuAction::Custom("rename".to_string())));
-        items.push(MenuItem::new("Delete", MenuAction::Custom("delete".to_string())));
-        
         if !is_directory {
             items.push(MenuItem::new("Open", MenuAction::Custom("open".to_string())));
         }
+        
+        // File management operations
+        items.push(MenuItem::new("Copy", MenuAction::Custom("copy".to_string())));
+        items.push(MenuItem::new("Cut", MenuAction::Custom("cut".to_string())));
+        items.push(MenuItem::new("Paste", MenuAction::Custom("paste".to_string())));
+        items.push(MenuItem::new("Rename", MenuAction::Custom("rename".to_string())));
+        items.push(MenuItem::new("Delete", MenuAction::Custom("delete".to_string())));
         
         let menu = MenuComponent::new(items);
         

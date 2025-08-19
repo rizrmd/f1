@@ -122,7 +122,7 @@ impl TabBar {
         frame.render_widget(paragraph, area);
     }
     
-    fn calculate_tab_spans(&self, tab_manager: &TabManager, available_width: usize) -> Vec<Span> {
+    fn calculate_tab_spans(&self, tab_manager: &TabManager, available_width: usize) -> Vec<Span<'_>> {
         let mut spans = Vec::new();
         let tabs = tab_manager.tabs();
         let tab_count = tabs.len();

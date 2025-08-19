@@ -176,10 +176,33 @@ impl App {
     }
 
     fn save_current_file(&mut self) {
+        if let Some(tab) = self.tab_manager.active_tab() {
+            if tab.path.is_none() {
+                // For untitled files, prompt for a filename
+                let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                self.menu_system.open_input_dialog(
+                    "Save as:".to_string(),
+                    "save_file".to_string(),
+                    current_dir,
+                );
+                return;
+            }
+        }
+        
+        // Save existing file
         if let Some(tab) = self.tab_manager.active_tab_mut() {
-            if let Some(path) = &tab.path {
+            if let Some(path) = &tab.path.clone() {
                 if let Ok(_) = std::fs::write(path, tab.buffer.to_string()) {
                     tab.mark_saved();
+                    self.set_status_message(
+                        format!("Saved: {}", path.display()),
+                        Duration::from_secs(2)
+                    );
+                } else {
+                    self.set_status_message(
+                        format!("Failed to save: {}", path.display()),
+                        Duration::from_secs(3)
+                    );
                 }
             }
         }
@@ -325,6 +348,55 @@ impl App {
                                 } else {
                                     self.menu_system.close();
                                 }
+                            }
+                            "copy" => {
+                                if let Some(tree_view) = &mut self.tree_view {
+                                    if let MenuState::TreeContextMenu(ref context_state) = &self.menu_system.state {
+                                        // Set the selected item to the context menu target
+                                        if let Some(index) = tree_view.find_item_index(&context_state.target_path) {
+                                            tree_view.selected_index = index;
+                                        }
+                                        tree_view.copy_selected();
+                                        if let Some(info) = tree_view.get_clipboard_info() {
+                                            self.set_status_message(info, Duration::from_secs(2));
+                                        }
+                                    }
+                                }
+                                self.menu_system.close();
+                            }
+                            "cut" => {
+                                if let Some(tree_view) = &mut self.tree_view {
+                                    if let MenuState::TreeContextMenu(ref context_state) = &self.menu_system.state {
+                                        // Set the selected item to the context menu target
+                                        if let Some(index) = tree_view.find_item_index(&context_state.target_path) {
+                                            tree_view.selected_index = index;
+                                        }
+                                        tree_view.cut_selected();
+                                        if let Some(info) = tree_view.get_clipboard_info() {
+                                            self.set_status_message(info, Duration::from_secs(2));
+                                        }
+                                    }
+                                }
+                                self.menu_system.close();
+                            }
+                            "paste" => {
+                                if let Some(tree_view) = &mut self.tree_view {
+                                    if let MenuState::TreeContextMenu(ref context_state) = &self.menu_system.state {
+                                        // Set the selected item to the context menu target
+                                        if let Some(index) = tree_view.find_item_index(&context_state.target_path) {
+                                            tree_view.selected_index = index;
+                                        }
+                                        match tree_view.paste_to_selected() {
+                                            Ok(message) => {
+                                                self.set_status_message(message, Duration::from_secs(3));
+                                            }
+                                            Err(error) => {
+                                                self.set_status_message(error, Duration::from_secs(3));
+                                            }
+                                        }
+                                    }
+                                }
+                                self.menu_system.close();
                             }
                             _ => {}
                         }
@@ -477,6 +549,34 @@ impl App {
                                 input_state.cursor_position = filename.len();
                                 input_state.selection_start = Some(0); // Select all text
                                 input_state.hovered_button = None;
+                            }
+                        }
+                        return;
+                    }
+                    // Copy - Ctrl+C
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                        tree_view.copy_selected();
+                        if let Some(info) = tree_view.get_clipboard_info() {
+                            self.set_status_message(info, Duration::from_secs(2));
+                        }
+                        return;
+                    }
+                    // Cut - Ctrl+X
+                    (KeyCode::Char('x'), KeyModifiers::CONTROL) => {
+                        tree_view.cut_selected();
+                        if let Some(info) = tree_view.get_clipboard_info() {
+                            self.set_status_message(info, Duration::from_secs(2));
+                        }
+                        return;
+                    }
+                    // Paste - Ctrl+V
+                    (KeyCode::Char('v'), KeyModifiers::CONTROL) => {
+                        match tree_view.paste_to_selected() {
+                            Ok(message) => {
+                                self.set_status_message(message, Duration::from_secs(3));
+                            }
+                            Err(error) => {
+                                self.set_status_message(error, Duration::from_secs(3));
                             }
                         }
                         return;
@@ -2413,32 +2513,69 @@ impl App {
     }
 
     fn execute_file_operation(&mut self, operation: &str, target_path: &PathBuf, input: &str) {
-        if let Some(tree_view) = &mut self.tree_view {
-            let result = match operation {
-                "new_file" => {
-                    tree_view.create_file(target_path, input.trim())
-                        .map(|_| format!("Created file '{}'", input.trim()))
-                        .map_err(|e| format!("Failed to create file: {}", e))
+        match operation {
+            "save_file" => {
+                // Save current tab to the specified filename
+                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                    let file_path = if input.trim().starts_with('/') {
+                        PathBuf::from(input.trim())
+                    } else {
+                        target_path.join(input.trim())
+                    };
+                    
+                    if let Ok(_) = std::fs::write(&file_path, tab.buffer.to_string()) {
+                        tab.path = Some(file_path.clone());
+                        tab.name = file_path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("untitled")
+                            .to_string();
+                        tab.mark_saved();
+                        self.set_status_message(
+                            format!("Saved: {}", file_path.display()),
+                            Duration::from_secs(2)
+                        );
+                        
+                        // Refresh tree view to show the new file
+                        if let Some(tree_view) = &mut self.tree_view {
+                            let _ = tree_view.refresh();
+                        }
+                    } else {
+                        self.set_status_message(
+                            format!("Failed to save: {}", input.trim()),
+                            Duration::from_secs(3)
+                        );
+                    }
                 }
-                "new_folder" => {
-                    tree_view.create_directory(target_path, input.trim())
-                        .map(|_| format!("Created directory '{}'", input.trim()))
-                        .map_err(|e| format!("Failed to create directory: {}", e))
-                }
-                "rename" => {
-                    tree_view.rename_file_or_directory(target_path, input.trim())
-                        .map(|_| format!("Renamed to '{}'", input.trim()))
-                        .map_err(|e| format!("Failed to rename: {}", e))
-                }
-                _ => return,
-            };
-            
-            match result {
-                Ok(message) => {
-                    self.set_status_message(message, Duration::from_secs(3));
-                }
-                Err(error) => {
-                    self.set_status_message(error, Duration::from_secs(5));
+            }
+            _ => {
+                if let Some(tree_view) = &mut self.tree_view {
+                    let result = match operation {
+                        "new_file" => {
+                            tree_view.create_file(target_path, input.trim())
+                                .map(|_| format!("Created file '{}'", input.trim()))
+                                .map_err(|e| format!("Failed to create file: {}", e))
+                        }
+                        "new_folder" => {
+                            tree_view.create_directory(target_path, input.trim())
+                                .map(|_| format!("Created directory '{}'", input.trim()))
+                                .map_err(|e| format!("Failed to create directory: {}", e))
+                        }
+                        "rename" => {
+                            tree_view.rename_file_or_directory(target_path, input.trim())
+                                .map(|_| format!("Renamed to '{}'", input.trim()))
+                                .map_err(|e| format!("Failed to rename: {}", e))
+                        }
+                        _ => return,
+                    };
+                    
+                    match result {
+                        Ok(message) => {
+                            self.set_status_message(message, Duration::from_secs(3));
+                        }
+                        Err(error) => {
+                            self.set_status_message(error, Duration::from_secs(5));
+                        }
+                    }
                 }
             }
         }

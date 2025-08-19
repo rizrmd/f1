@@ -125,6 +125,13 @@ pub struct TreeView {
     pub is_focused: bool,
     gitignore: GitIgnore,
     pub just_refreshed: bool, // Flag for visual feedback
+    pub clipboard: Option<ClipboardEntry>, // For copy/cut/paste operations
+}
+
+#[derive(Debug, Clone)]
+pub struct ClipboardEntry {
+    pub path: PathBuf,
+    pub is_cut: bool, // true for cut, false for copy
 }
 
 impl TreeView {
@@ -145,6 +152,7 @@ impl TreeView {
             is_focused: false,
             gitignore,
             just_refreshed: false,
+            clipboard: None,
         };
         
         // Update gitignore status for all nodes
@@ -606,6 +614,140 @@ impl TreeView {
         }
         
         self.selected_index = self.selected_index.min(total_items.saturating_sub(1));
+    }
+    
+    // File management operations
+    pub fn copy_selected(&mut self) {
+        if let Some(item) = self.get_selected_item() {
+            self.clipboard = Some(ClipboardEntry {
+                path: item.path.clone(),
+                is_cut: false,
+            });
+        }
+    }
+    
+    pub fn cut_selected(&mut self) {
+        if let Some(item) = self.get_selected_item() {
+            self.clipboard = Some(ClipboardEntry {
+                path: item.path.clone(),
+                is_cut: true,
+            });
+        }
+    }
+    
+    pub fn paste_to_selected(&mut self) -> Result<String, String> {
+        let clipboard_entry = match &self.clipboard {
+            Some(entry) => entry.clone(),
+            None => return Err("Nothing to paste".to_string()),
+        };
+        
+        // Get the target directory
+        let target_dir = if let Some(selected_item) = self.get_selected_item() {
+            if selected_item.is_dir {
+                selected_item.path.clone()
+            } else {
+                selected_item.path.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| self.root.path.clone())
+            }
+        } else {
+            self.root.path.clone()
+        };
+        
+        let source_name = clipboard_entry.path.file_name()
+            .ok_or_else(|| "Invalid source path".to_string())?;
+        
+        let mut target_path = target_dir.join(source_name);
+        
+        // If the target already exists, generate a unique name
+        if target_path.exists() {
+            let stem = clipboard_entry.path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("file");
+            let extension = clipboard_entry.path.extension()
+                .and_then(|e| e.to_str());
+            
+            let mut counter = 1;
+            loop {
+                let new_name = if let Some(ext) = extension {
+                    format!("{}_copy_{}.{}", stem, counter, ext)
+                } else {
+                    format!("{}_copy_{}", stem, counter)
+                };
+                target_path = target_dir.join(new_name);
+                if !target_path.exists() {
+                    break;
+                }
+                counter += 1;
+            }
+        }
+        
+        // Perform the operation
+        if clipboard_entry.is_cut {
+            // Move operation
+            fs::rename(&clipboard_entry.path, &target_path)
+                .map_err(|e| format!("Failed to move: {}", e))?;
+            
+            // Clear clipboard after successful cut
+            self.clipboard = None;
+            
+            // Refresh the tree
+            self.refresh();
+            
+            Ok(format!("Moved to {}", target_path.display()))
+        } else {
+            // Copy operation
+            if clipboard_entry.path.is_dir() {
+                Self::copy_dir_recursive(&clipboard_entry.path, &target_path)
+                    .map_err(|e| format!("Failed to copy directory: {}", e))?;
+            } else {
+                fs::copy(&clipboard_entry.path, &target_path)
+                    .map_err(|e| format!("Failed to copy file: {}", e))?;
+            }
+            
+            // Refresh the tree
+            self.refresh();
+            
+            Ok(format!("Copied to {}", target_path.display()))
+        }
+    }
+    
+    fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+        fs::create_dir_all(dst)?;
+        
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            
+            if src_path.is_dir() {
+                Self::copy_dir_recursive(&src_path, &dst_path)?;
+            } else {
+                fs::copy(&src_path, &dst_path)?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn has_clipboard(&self) -> bool {
+        self.clipboard.is_some()
+    }
+    
+    pub fn get_clipboard_info(&self) -> Option<String> {
+        self.clipboard.as_ref().map(|entry| {
+            let operation = if entry.is_cut { "Cut" } else { "Copied" };
+            let name = entry.path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("item");
+            format!("{}: {}", operation, name)
+        })
+    }
+    
+    pub fn find_item_index(&self, target_path: &Path) -> Option<usize> {
+        let visible_items = self.get_visible_items();
+        visible_items.iter()
+            .position(|item| item.path == target_path)
     }
 }
 
