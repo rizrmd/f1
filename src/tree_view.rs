@@ -124,6 +124,7 @@ pub struct TreeView {
     pub width: u16,
     pub is_focused: bool,
     gitignore: GitIgnore,
+    pub just_refreshed: bool, // Flag for visual feedback
 }
 
 impl TreeView {
@@ -143,6 +144,7 @@ impl TreeView {
             width,
             is_focused: false,
             gitignore,
+            just_refreshed: false,
         };
         
         // Update gitignore status for all nodes
@@ -276,6 +278,92 @@ impl TreeView {
         }
         
         Ok(())
+    }
+    
+    pub fn refresh(&mut self) {
+        // Set refresh flag for visual feedback
+        self.just_refreshed = true;
+        
+        // Save current state
+        let selected_path = self.get_selected_item().map(|item| item.path.clone());
+        let mut expanded_paths = Vec::new();
+        
+        // Collect expanded paths
+        self.collect_expanded_paths(&self.root.clone(), &mut expanded_paths);
+        
+        // Recreate the root node
+        let root_path = self.root.path.clone();
+        self.root = TreeNode::new(root_path.clone(), 0);
+        
+        // Load root children
+        if let Err(_) = self.root.load_children() {
+            return;
+        }
+        
+        // Apply gitignore to root children
+        for child in &mut self.root.children {
+            child.is_gitignored = self.gitignore.is_ignored(&child.path);
+        }
+        
+        // Re-expand previously expanded directories
+        for path in expanded_paths {
+            Self::expand_path_recursive_static(&path, &mut self.root, &self.gitignore);
+        }
+        
+        // Restore selection if possible
+        if let Some(path) = selected_path {
+            self.restore_selection(&path);
+        }
+    }
+    
+    fn collect_expanded_paths(&self, node: &TreeNode, paths: &mut Vec<PathBuf>) {
+        if node.is_expanded && node.is_dir {
+            paths.push(node.path.clone());
+            for child in &node.children {
+                self.collect_expanded_paths(child, paths);
+            }
+        }
+    }
+    
+    fn expand_path_recursive_static(target_path: &PathBuf, node: &mut TreeNode, gitignore: &GitIgnore) {
+        if node.path == *target_path && node.is_dir {
+            node.is_expanded = true;
+            if node.children.is_empty() {
+                let _ = node.load_children();
+                // Apply gitignore to children
+                for child in &mut node.children {
+                    child.is_gitignored = gitignore.is_ignored(&child.path);
+                }
+            }
+        }
+        
+        // Recursively check children - need to iterate with index to avoid borrow issues
+        let num_children = node.children.len();
+        for i in 0..num_children {
+            Self::expand_path_recursive_static(target_path, &mut node.children[i], gitignore);
+        }
+    }
+    
+    pub fn clear_refresh_flag(&mut self) {
+        self.just_refreshed = false;
+    }
+    
+    pub fn restore_selection(&mut self, path: &PathBuf) {
+        let visible_items = self.get_visible_items();
+        for (index, item) in visible_items.iter().enumerate() {
+            if item.path == *path {
+                self.selected_index = index;
+                
+                // Ensure selection is visible
+                let visible_height = 20; // This could be made configurable
+                if self.selected_index < self.scroll_offset {
+                    self.scroll_offset = self.selected_index;
+                } else if self.selected_index >= self.scroll_offset + visible_height {
+                    self.scroll_offset = self.selected_index.saturating_sub(visible_height - 1);
+                }
+                break;
+            }
+        }
     }
     
     pub fn get_visible_items(&self) -> Vec<&TreeNode> {

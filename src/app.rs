@@ -438,6 +438,26 @@ impl App {
                         }
                         return;
                     }
+                    (KeyCode::F(5), KeyModifiers::NONE) | (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                        // Refresh tree view
+                        if let Some(ref mut tree_view) = self.tree_view {
+                            let current_selected = tree_view.get_selected_item().map(|item| item.path.clone());
+                            tree_view.refresh();
+                            
+                            // Try to restore selection
+                            if let Some(path) = current_selected {
+                                tree_view.restore_selection(&path);
+                            }
+                            
+                            // Show status message with more detail
+                            let visible_count = tree_view.get_visible_items().len();
+                            self.set_status_message(
+                                format!("Tree view refreshed ({} items)", visible_count),
+                                Duration::from_secs(2)
+                            );
+                        }
+                        return;
+                    }
                     (KeyCode::Char('r'), KeyModifiers::NONE) => {
                         // Rename
                         if let Some(selected_item) = tree_view.get_selected_item() {
