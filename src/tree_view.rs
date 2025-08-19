@@ -195,6 +195,88 @@ impl TreeView {
         Ok(())
     }
     
+    pub fn create_file(&mut self, parent_path: &Path, filename: &str) -> Result<PathBuf, std::io::Error> {
+        let file_path = parent_path.join(filename);
+        
+        // Create the file
+        std::fs::File::create(&file_path)?;
+        
+        // Refresh the tree
+        self.refresh_directory(parent_path)?;
+        
+        Ok(file_path)
+    }
+    
+    pub fn create_directory(&mut self, parent_path: &Path, dirname: &str) -> Result<PathBuf, std::io::Error> {
+        let dir_path = parent_path.join(dirname);
+        
+        // Create the directory
+        std::fs::create_dir(&dir_path)?;
+        
+        // Refresh the tree
+        self.refresh_directory(parent_path)?;
+        
+        Ok(dir_path)
+    }
+    
+    pub fn delete_file_or_directory(&mut self, path: &Path) -> Result<(), std::io::Error> {
+        if path.is_dir() {
+            std::fs::remove_dir_all(path)?;
+        } else {
+            std::fs::remove_file(path)?;
+        }
+        
+        // Refresh the parent directory
+        if let Some(parent) = path.parent() {
+            self.refresh_directory(parent)?;
+        }
+        
+        Ok(())
+    }
+    
+    pub fn rename_file_or_directory(&mut self, old_path: &Path, new_name: &str) -> Result<PathBuf, std::io::Error> {
+        let parent = old_path.parent().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "Cannot rename root directory")
+        })?;
+        
+        let new_path = parent.join(new_name);
+        
+        // Rename the file/directory
+        std::fs::rename(old_path, &new_path)?;
+        
+        // Refresh the parent directory
+        self.refresh_directory(parent)?;
+        
+        Ok(new_path)
+    }
+    
+    fn refresh_directory(&mut self, dir_path: &Path) -> Result<(), std::io::Error> {
+        // Find the node and reload its children
+        Self::refresh_node_recursive(&mut self.root, dir_path)?;
+        
+        // Update gitignore status for any newly loaded nodes
+        self.update_gitignore_status();
+        
+        Ok(())
+    }
+    
+    fn refresh_node_recursive(node: &mut TreeNode, target_path: &Path) -> Result<(), std::io::Error> {
+        if node.path == target_path && node.is_dir {
+            // Clear children and reload
+            node.children.clear();
+            node.load_children()?;
+            return Ok(());
+        }
+        
+        for child in &mut node.children {
+            if target_path.starts_with(&child.path) {
+                Self::refresh_node_recursive(child, target_path)?;
+                return Ok(());
+            }
+        }
+        
+        Ok(())
+    }
     
     pub fn get_visible_items(&self) -> Vec<&TreeNode> {
         if self.is_searching && !self.search_query.is_empty() {

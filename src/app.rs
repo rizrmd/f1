@@ -3,11 +3,15 @@ use ratatui::Frame;
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
 
+fn is_word_separator(ch: char) -> bool {
+    matches!(ch, '.' | '-' | '_' | '/' | '\\' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'' | ',' | ';' | ':')
+}
+
 use crate::keyboard::{handle_key_event, EditorCommand};
 use crate::tab::{Tab, TabManager};
 use crate::ui::{UI, ScrollbarState};
 use crate::cursor::Position;
-use crate::menu::{MenuSystem, FileItem};
+use crate::menu::{MenuSystem, MenuState, FileItem};
 use crate::tree_view::TreeView;
 
 pub struct App {
@@ -33,6 +37,7 @@ pub struct App {
     tree_scrollbar_dragging: bool,
     pub status_message: Option<String>,
     status_message_expires: Option<Instant>,
+    pending_delete_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +75,7 @@ impl App {
             tree_scrollbar_dragging: false,
             status_message: None,
             status_message_expires: None,
+            pending_delete_path: None,
         }
     }
     
@@ -194,6 +200,12 @@ impl App {
             return;
         }
 
+        // Handle input dialog
+        if let crate::menu::MenuState::InputDialog(_) = &self.menu_system.state {
+            self.handle_input_dialog_key(key);
+            return;
+        }
+
         // Handle menu navigation
         if self.menu_system.is_open() {
             match (key.code, key.modifiers) {
@@ -231,6 +243,88 @@ impl App {
                             }
                             "quit" => {
                                 self.handle_quit();
+                            }
+                            // Tree context menu actions
+                            "new_file" => {
+                                if let MenuState::TreeContextMenu(ref context_state) = &self.menu_system.state {
+                                    let target_path = context_state.target_path.clone();
+                                    self.menu_system.open_input_dialog(
+                                        "Enter filename:".to_string(),
+                                        "new_file".to_string(),
+                                        target_path
+                                    );
+                                    // Cursor is already at position 0 by default
+                                } else {
+                                    self.menu_system.close();
+                                }
+                            }
+                            "new_folder" => {
+                                if let MenuState::TreeContextMenu(ref context_state) = &self.menu_system.state {
+                                    let target_path = context_state.target_path.clone();
+                                    self.menu_system.open_input_dialog(
+                                        "Enter directory name:".to_string(),
+                                        "new_folder".to_string(),
+                                        target_path
+                                    );
+                                    // Cursor is already at position 0 by default
+                                } else {
+                                    self.menu_system.close();
+                                }
+                            }
+                            "rename" => {
+                                if let MenuState::TreeContextMenu(ref context_state) = &self.menu_system.state {
+                                    let target_path = context_state.target_path.clone();
+                                    let filename = target_path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    self.menu_system.open_input_dialog(
+                                        "Enter new name:".to_string(),
+                                        "rename".to_string(),
+                                        target_path
+                                    );
+                                    // Pre-fill with current filename and select all
+                                    if let MenuState::InputDialog(ref mut input_state) = &mut self.menu_system.state {
+                                        input_state.input = filename.clone();
+                                        input_state.cursor_position = filename.len();
+                                        input_state.selection_start = Some(0); // Select all text
+                                        input_state.hovered_button = None;
+                                    }
+                                } else {
+                                    self.menu_system.close();
+                                }
+                            }
+                            "delete" => {
+                                if let MenuState::TreeContextMenu(ref context_state) = &self.menu_system.state {
+                                    let target_path = context_state.target_path.clone();
+                                    let filename = target_path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("item")
+                                        .to_string();
+                                    let file_type = if context_state.is_directory { "directory" } else { "file" };
+                                    let message = format!("Delete {} '{}'?", file_type, filename);
+                                    self.warning_message = Some(message);
+                                    self.warning_selected_button = 0; // Default to "No"
+                                    self.warning_is_info = false; // Yes/No dialog
+                                    self.pending_delete_path = Some(target_path);
+                                    self.menu_system.close();
+                                } else {
+                                    self.menu_system.close();
+                                }
+                            }
+                            "open" => {
+                                if let MenuState::TreeContextMenu(ref context_state) = &self.menu_system.state {
+                                    let file_path = context_state.target_path.clone();
+                                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                                        let new_tab = Tab::from_file(file_path, &content);
+                                        self.tab_manager.add_tab(new_tab);
+                                        self.expand_tree_to_current_file();
+                                        self.handle_command(EditorCommand::FocusEditor);
+                                    }
+                                    self.menu_system.close();
+                                } else {
+                                    self.menu_system.close();
+                                }
                             }
                             _ => {}
                         }
@@ -306,6 +400,98 @@ impl App {
                     (KeyCode::Backspace, KeyModifiers::NONE) => {
                         if tree_view.is_searching {
                             tree_view.remove_search_char();
+                        }
+                        return;
+                    }
+                    // File management shortcuts
+                    (KeyCode::Char('n'), KeyModifiers::NONE) => {
+                        // New file
+                        if let Some(selected_item) = tree_view.get_selected_item() {
+                            let target_path = if selected_item.is_dir {
+                                selected_item.path.clone()
+                            } else {
+                                selected_item.path.parent().unwrap_or(&selected_item.path).to_path_buf()
+                            };
+                            self.menu_system.open_input_dialog(
+                                "Enter filename:".to_string(),
+                                "new_file".to_string(),
+                                target_path
+                            );
+                            // Cursor is already at position 0 by default, ready to type
+                        }
+                        return;
+                    }
+                    (KeyCode::Char('d'), KeyModifiers::NONE) => {
+                        // New directory
+                        if let Some(selected_item) = tree_view.get_selected_item() {
+                            let target_path = if selected_item.is_dir {
+                                selected_item.path.clone()
+                            } else {
+                                selected_item.path.parent().unwrap_or(&selected_item.path).to_path_buf()
+                            };
+                            self.menu_system.open_input_dialog(
+                                "Enter directory name:".to_string(),
+                                "new_folder".to_string(),
+                                target_path
+                            );
+                            // Cursor is already at position 0 by default, ready to type
+                        }
+                        return;
+                    }
+                    (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                        // Rename
+                        if let Some(selected_item) = tree_view.get_selected_item() {
+                            let filename = selected_item.path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string();
+                            // Pre-fill with current name
+                            self.menu_system.open_input_dialog(
+                                "Enter new name:".to_string(),
+                                "rename".to_string(),
+                                selected_item.path.clone()
+                            );
+                            // Set the input to current filename and select all
+                            if let MenuState::InputDialog(ref mut input_state) = &mut self.menu_system.state {
+                                input_state.input = filename.clone();
+                                input_state.cursor_position = filename.len();
+                                input_state.selection_start = Some(0); // Select all text
+                                input_state.hovered_button = None;
+                            }
+                        }
+                        return;
+                    }
+                    (KeyCode::Delete, KeyModifiers::NONE) => {
+                        // Delete with confirmation
+                        if let Some(selected_item) = tree_view.get_selected_item() {
+                            let filename = selected_item.path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("item")
+                                .to_string();
+                            let file_type = if selected_item.is_dir { "directory" } else { "file" };
+                            let message = format!("Delete {} '{}'?", file_type, filename);
+                            self.warning_message = Some(message);
+                            self.warning_selected_button = 0; // Default to "No"
+                            self.warning_is_info = false; // Yes/No dialog
+                            self.pending_delete_path = Some(selected_item.path.clone());
+                        }
+                        return;
+                    }
+                    // Context menu
+                    (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                        // Space bar opens context menu
+                        if let Some(selected_item) = tree_view.get_selected_item() {
+                            // Calculate position - roughly center of tree view
+                            let tree_area_start_x = 0;
+                            let tree_area_start_y = 1; // After tab bar
+                            let menu_x = tree_area_start_x + 10;
+                            let menu_y = tree_area_start_y + 5;
+                            
+                            self.menu_system.open_tree_context_menu(
+                                selected_item.path.clone(),
+                                selected_item.is_dir,
+                                (menu_x, menu_y)
+                            );
                         }
                         return;
                     }
@@ -471,6 +657,13 @@ impl App {
             self.handle_mouse_on_dialog(mouse);
             return;
         }
+        
+        // Handle input dialog mouse events
+        if let crate::menu::MenuState::InputDialog(_) = &self.menu_system.state {
+            if self.handle_mouse_on_input_dialog(mouse) {
+                return;
+            }
+        }
 
         // Handle file picker mouse events
         if let crate::menu::MenuState::FilePicker(_) = &self.menu_system.state {
@@ -586,12 +779,37 @@ impl App {
                         if !self.tab_manager.close_current_tab() {
                             self.running = false;
                         }
+                    } else if let Some(delete_path) = &self.pending_delete_path {
+                        // Delete the file/directory
+                        let path_to_delete = delete_path.clone();
+                        self.pending_delete_path = None;
+                        
+                        if let Some(tree_view) = &mut self.tree_view {
+                            match tree_view.delete_file_or_directory(&path_to_delete) {
+                                Ok(()) => {
+                                    let filename = path_to_delete.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("item");
+                                    self.set_status_message(
+                                        format!("Deleted '{}'", filename),
+                                        Duration::from_secs(3)
+                                    );
+                                }
+                                Err(e) => {
+                                    self.set_status_message(
+                                        format!("Failed to delete: {}", e),
+                                        Duration::from_secs(5)
+                                    );
+                                }
+                            }
+                        }
                     }
                 } else {
                     // No button selected - cancel
                     self.warning_message = None;
                     self.pending_close = false;
                     self.pending_quit = false;
+                    self.pending_delete_path = None;
                     self.warning_selected_button = 0;
                 }
             }
@@ -612,6 +830,30 @@ impl App {
                     if !self.tab_manager.close_current_tab() {
                         self.running = false;
                     }
+                } else if let Some(delete_path) = &self.pending_delete_path {
+                    // Delete the file/directory
+                    let path_to_delete = delete_path.clone();
+                    self.pending_delete_path = None;
+                    
+                    if let Some(tree_view) = &mut self.tree_view {
+                        match tree_view.delete_file_or_directory(&path_to_delete) {
+                            Ok(()) => {
+                                let filename = path_to_delete.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("item");
+                                self.set_status_message(
+                                    format!("Deleted '{}'", filename),
+                                    Duration::from_secs(3)
+                                );
+                            }
+                            Err(e) => {
+                                self.set_status_message(
+                                    format!("Failed to delete: {}", e),
+                                    Duration::from_secs(5)
+                                );
+                            }
+                        }
+                    }
                 }
             }
             (KeyCode::Char('n'), KeyModifiers::NONE) | (KeyCode::Char('N'), KeyModifiers::NONE) | (KeyCode::Esc, KeyModifiers::NONE) => {
@@ -619,6 +861,7 @@ impl App {
                 self.warning_message = None;
                 self.pending_close = false;
                 self.pending_quit = false;
+                self.pending_delete_path = None;
                 self.warning_selected_button = 0;
             }
             _ => {
@@ -899,12 +1142,37 @@ impl App {
                             if !self.tab_manager.close_current_tab() {
                                 self.running = false;
                             }
+                        } else if let Some(delete_path) = &self.pending_delete_path {
+                            // Delete the file/directory
+                            let path_to_delete = delete_path.clone();
+                            self.pending_delete_path = None;
+                            
+                            if let Some(tree_view) = &mut self.tree_view {
+                                match tree_view.delete_file_or_directory(&path_to_delete) {
+                                    Ok(()) => {
+                                        let filename = path_to_delete.file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("item");
+                                        self.set_status_message(
+                                            format!("Deleted '{}'", filename),
+                                            Duration::from_secs(3)
+                                        );
+                                    }
+                                    Err(e) => {
+                                        self.set_status_message(
+                                            format!("Failed to delete: {}", e),
+                                            Duration::from_secs(5)
+                                        );
+                                    }
+                                }
+                            }
                         }
                     } else {
                         // No button clicked - cancel
                         self.warning_message = None;
                         self.pending_close = false;
                         self.pending_quit = false;
+                        self.pending_delete_path = None;
                         self.warning_selected_button = 0;
                     }
                 }
@@ -1021,6 +1289,21 @@ impl App {
                         }
                         return true;
                     }
+                    crate::menu::MenuState::TreeContextMenu(context_state) => {
+                        let menu_area = ratatui::layout::Rect {
+                            x: context_state.position.0,
+                            y: context_state.position.1,
+                            width: context_state.menu.width,
+                            height: context_state.menu.height,
+                        };
+                        
+                        let hovered_item = context_state.menu.get_clicked_item(&menu_area, mouse.column, mouse.row);
+                        
+                        if let crate::menu::MenuState::TreeContextMenu(context_state) = &mut self.menu_system.state {
+                            context_state.menu.hovered_index = hovered_item;
+                        }
+                        return true;
+                    }
                     _ => {}
                 }
             }
@@ -1096,7 +1379,92 @@ impl App {
                             return true;
                         }
                     }
+                    crate::menu::MenuState::TreeContextMenu(context_state) => {
+                        let menu_area = ratatui::layout::Rect {
+                            x: context_state.position.0,
+                            y: context_state.position.1,
+                            width: context_state.menu.width,
+                            height: context_state.menu.height,
+                        };
+                        if let Some(item_index) = context_state.menu.get_clicked_item(&menu_area, mouse.column, mouse.row) {
+                            // Extract needed information before modifying the menu state
+                            let target_path = context_state.target_path.clone();
+                            let is_directory = context_state.is_directory;
+                            
+                            // Update selection and handle click
+                            if let crate::menu::MenuState::TreeContextMenu(context_state) = &mut self.menu_system.state {
+                                context_state.menu.selected_index = item_index;
+                                if let Some(action) = self.menu_system.handle_enter() {
+                                    match action.as_str() {
+                                        "new_file" => {
+                                            self.menu_system.open_input_dialog(
+                                                "Enter filename:".to_string(),
+                                                "new_file".to_string(),
+                                                target_path
+                                            );
+                                            // Cursor is already at position 0 by default, ready to type
+                                        }
+                                        "new_folder" => {
+                                            self.menu_system.open_input_dialog(
+                                                "Enter directory name:".to_string(),
+                                                "new_folder".to_string(),
+                                                target_path
+                                            );
+                                            // Cursor is already at position 0 by default, ready to type
+                                        }
+                                        "rename" => {
+                                            let filename = target_path.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            self.menu_system.open_input_dialog(
+                                                "Enter new name:".to_string(),
+                                                "rename".to_string(),
+                                                target_path
+                                            );
+                                            // Pre-fill with current filename and select all
+                                            if let crate::menu::MenuState::InputDialog(ref mut input_state) = &mut self.menu_system.state {
+                                                input_state.input = filename.clone();
+                                                input_state.cursor_position = filename.len();
+                                                input_state.selection_start = Some(0); // Select all text
+                                                input_state.hovered_button = None;
+                                            }
+                                        }
+                                        "delete" => {
+                                            let filename = target_path.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("item")
+                                                .to_string();
+                                            let file_type = if is_directory { "directory" } else { "file" };
+                                            let message = format!("Delete {} '{}'?", file_type, filename);
+                                            self.warning_message = Some(message);
+                                            self.warning_selected_button = 0; // Default to "No"
+                                            self.warning_is_info = false; // Yes/No dialog
+                                            self.pending_delete_path = Some(target_path);
+                                            self.menu_system.close();
+                                        }
+                                        "open" => {
+                                            if let Ok(content) = std::fs::read_to_string(&target_path) {
+                                                let new_tab = Tab::from_file(target_path, &content);
+                                                self.tab_manager.add_tab(new_tab);
+                                                self.expand_tree_to_current_file();
+                                                self.handle_command(EditorCommand::FocusEditor);
+                                            }
+                                            self.menu_system.close();
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            return true;
+                        }
+                    }
                     _ => {}
+                }
+                
+                // If we get here, the click was not on any menu, so close any open context menu
+                if matches!(self.menu_system.state, crate::menu::MenuState::TreeContextMenu(_)) {
+                    self.menu_system.close();
                 }
             }
             _ => {}
@@ -1518,6 +1886,544 @@ impl App {
         }
     }
 
+    fn handle_mouse_on_input_dialog(&mut self, mouse: MouseEvent) -> bool {
+        use crossterm::event::{MouseEventKind, MouseButton};
+        
+        if let crate::menu::MenuState::InputDialog(input_state) = &mut self.menu_system.state {
+            // Calculate dialog position (same logic as in UI module)
+            let dialog_width = 50u16.min(self.terminal_size.0.saturating_sub(4));
+            let dialog_height = 8; // Updated to match UI spacing
+            let dialog_x = (self.terminal_size.0.saturating_sub(dialog_width)) / 2;
+            let dialog_y = (self.terminal_size.1.saturating_sub(dialog_height)) / 2;
+            
+            // Check if click is within dialog bounds
+            if mouse.column < dialog_x || mouse.column >= dialog_x + dialog_width ||
+               mouse.row < dialog_y || mouse.row >= dialog_y + dialog_height {
+                // Click outside dialog - could close it or ignore
+                return false;
+            }
+            
+            // Calculate input field position (row 2 of inner dialog, with margin)
+            let input_row = dialog_y + 3; // border + margin + title + prompt = 3
+            let button_row = dialog_y + 5; // After input field and spacing
+            
+            // Handle button hover and clicks
+            if mouse.row == button_row {
+                match mouse.kind {
+                    MouseEventKind::Moved => {
+                        // Calculate button positions (centered)
+                        let button_area_start = dialog_x + (dialog_width / 2) - 15;
+                        let ok_start = button_area_start;
+                        let ok_end = ok_start + 13; // " [Enter] OK  " = 13 chars
+                        let cancel_start = ok_end + 2; // 2 spaces between buttons
+                        let cancel_end = cancel_start + 14; // " [Esc] Cancel " = 14 chars
+                        
+                        if mouse.column >= ok_start && mouse.column < ok_end {
+                            input_state.hovered_button = Some(0); // Hovering OK
+                        } else if mouse.column >= cancel_start && mouse.column < cancel_end {
+                            input_state.hovered_button = Some(1); // Hovering Cancel
+                        } else {
+                            input_state.hovered_button = None;
+                        }
+                        return true;
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        // Calculate button positions (centered)
+                        let button_area_start = dialog_x + (dialog_width / 2) - 15;
+                        let ok_start = button_area_start;
+                        let ok_end = ok_start + 13; // " [Enter] OK  " = 13 chars
+                        let cancel_start = ok_end + 2; // 2 spaces between buttons
+                        let cancel_end = cancel_start + 14; // " [Esc] Cancel " = 14 chars
+                        
+                        if mouse.column >= ok_start && mouse.column < ok_end {
+                            // OK button clicked - execute operation
+                            let operation = input_state.operation.clone();
+                            let target_path = input_state.target_path.clone();
+                            let input_text = input_state.input.clone();
+                            
+                            // Close the dialog first
+                            self.menu_system.close();
+                            
+                            // Perform the operation
+                            if !input_text.trim().is_empty() {
+                                self.execute_file_operation(&operation, &target_path, &input_text);
+                            }
+                            return true;
+                        } else if mouse.column >= cancel_start && mouse.column < cancel_end {
+                            // Cancel button clicked
+                            self.menu_system.close();
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            
+            // Clear button hover if mouse is elsewhere
+            if mouse.row != button_row && matches!(mouse.kind, MouseEventKind::Moved) {
+                input_state.hovered_button = None;
+            }
+            
+            // Handle input field clicks
+            if mouse.row == input_row {
+                let input_start_x = dialog_x + 1; // margin
+                let relative_x = mouse.column.saturating_sub(input_start_x) as usize;
+                
+                match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        // Set cursor position based on click
+                        if relative_x <= input_state.input.len() {
+                            input_state.cursor_position = relative_x;
+                            input_state.selection_start = Some(relative_x); // Start selection
+                        } else {
+                            input_state.cursor_position = input_state.input.len();
+                            input_state.selection_start = Some(input_state.input.len());
+                        }
+                        
+                        // Check for double-click
+                        static mut LAST_CLICK_TIME: Option<std::time::Instant> = None;
+                        static mut LAST_CLICK_POS: usize = 0;
+                        
+                        let now = std::time::Instant::now();
+                        let is_double_click = unsafe {
+                            if let Some(last_time) = LAST_CLICK_TIME {
+                                let same_pos = LAST_CLICK_POS == input_state.cursor_position;
+                                now.duration_since(last_time) < std::time::Duration::from_millis(500) && same_pos
+                            } else {
+                                false
+                            }
+                        };
+                        
+                        if is_double_click {
+                            // Double-click: select word at cursor
+                            Self::select_word_at_cursor(input_state);
+                            unsafe {
+                                LAST_CLICK_TIME = None; // Reset to prevent triple-click
+                            }
+                        } else {
+                            unsafe {
+                                LAST_CLICK_TIME = Some(now);
+                                LAST_CLICK_POS = input_state.cursor_position;
+                            }
+                        }
+                        
+                        return true;
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        // Update cursor position while maintaining selection
+                        if relative_x <= input_state.input.len() {
+                            input_state.cursor_position = relative_x;
+                        } else {
+                            input_state.cursor_position = input_state.input.len();
+                        }
+                        return true;
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        // End selection - if start == end, clear selection
+                        if let Some(sel_start) = input_state.selection_start {
+                            if sel_start == input_state.cursor_position {
+                                input_state.selection_start = None;
+                            }
+                        }
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            
+            return true; // Mouse was in dialog area
+        }
+        
+        false
+    }
+    
+    fn select_word_at_cursor(input_state: &mut crate::menu::InputDialogState) {
+        let text = &input_state.input;
+        let pos = input_state.cursor_position;
+        
+        if text.is_empty() {
+            return;
+        }
+        
+        // Find word boundaries
+        let chars: Vec<char> = text.chars().collect();
+        
+        // Find start of word
+        let mut start = pos;
+        while start > 0 && !chars[start - 1].is_whitespace() && !is_word_separator(chars[start - 1]) {
+            start -= 1;
+        }
+        
+        // Find end of word
+        let mut end = pos;
+        while end < chars.len() && !chars[end].is_whitespace() && !is_word_separator(chars[end]) {
+            end += 1;
+        }
+        
+        // Set selection
+        input_state.selection_start = Some(start);
+        input_state.cursor_position = end;
+    }
+
+    fn handle_input_dialog_key(&mut self, key: KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        
+        if let crate::menu::MenuState::InputDialog(input_state) = &mut self.menu_system.state {
+            match (key.code, key.modifiers) {
+                // Character input
+                (KeyCode::Char(c), KeyModifiers::NONE) => {
+                    // Delete selection if any
+                    if input_state.selection_start.is_some() {
+                        Self::delete_input_selection(input_state);
+                    }
+                    // Insert character at cursor position
+                    input_state.input.insert(input_state.cursor_position, c);
+                    input_state.cursor_position += 1;
+                }
+                
+                // Backspace
+                (KeyCode::Backspace, KeyModifiers::NONE) => {
+                    if input_state.selection_start.is_some() {
+                        Self::delete_input_selection(input_state);
+                    } else if input_state.cursor_position > 0 {
+                        input_state.cursor_position -= 1;
+                        input_state.input.remove(input_state.cursor_position);
+                    }
+                }
+                
+                // Ctrl+Backspace or Alt+Backspace - delete word
+                (KeyCode::Backspace, KeyModifiers::CONTROL) | (KeyCode::Backspace, KeyModifiers::ALT) => {
+                    if input_state.selection_start.is_some() {
+                        Self::delete_input_selection(input_state);
+                    } else if input_state.cursor_position > 0 {
+                        let original_pos = input_state.cursor_position;
+                        let chars: Vec<char> = input_state.input.chars().collect();
+                        let mut pos = input_state.cursor_position;
+                        
+                        // Move back to find the start of deletion
+                        if pos > 0 && pos <= chars.len() {
+                            pos -= 1;
+                            
+                            // If we're on whitespace, delete all whitespace
+                            if chars[pos].is_whitespace() {
+                                while pos > 0 && chars[pos - 1].is_whitespace() {
+                                    pos -= 1;
+                                }
+                            }
+                            // Otherwise, delete the word
+                            else {
+                                // Skip to beginning of current word
+                                while pos > 0 && !chars[pos - 1].is_whitespace() && !is_word_separator(chars[pos - 1]) {
+                                    pos -= 1;
+                                }
+                            }
+                        }
+                        
+                        // Delete from pos to original_pos
+                        let delete_count = original_pos - pos;
+                        for _ in 0..delete_count {
+                            if pos < input_state.input.len() {
+                                input_state.input.remove(pos);
+                            }
+                        }
+                        input_state.cursor_position = pos;
+                    }
+                }
+                
+                // Delete
+                (KeyCode::Delete, KeyModifiers::NONE) => {
+                    if input_state.selection_start.is_some() {
+                        Self::delete_input_selection(input_state);
+                    } else if input_state.cursor_position < input_state.input.len() {
+                        input_state.input.remove(input_state.cursor_position);
+                    }
+                }
+                
+                // Cursor movement
+                (KeyCode::Left, KeyModifiers::NONE) => {
+                    if input_state.cursor_position > 0 {
+                        input_state.cursor_position -= 1;
+                    }
+                    input_state.selection_start = None;
+                }
+                (KeyCode::Right, KeyModifiers::NONE) => {
+                    if input_state.cursor_position < input_state.input.len() {
+                        input_state.cursor_position += 1;
+                    }
+                    input_state.selection_start = None;
+                }
+                (KeyCode::Home, KeyModifiers::NONE) => {
+                    input_state.cursor_position = 0;
+                    input_state.selection_start = None;
+                }
+                (KeyCode::End, KeyModifiers::NONE) => {
+                    input_state.cursor_position = input_state.input.len();
+                    input_state.selection_start = None;
+                }
+                
+                // Word movement with Ctrl+Arrow or Alt+Arrow
+                (KeyCode::Left, KeyModifiers::CONTROL) | (KeyCode::Left, KeyModifiers::ALT) => {
+                    if input_state.cursor_position > 0 {
+                        let chars: Vec<char> = input_state.input.chars().collect();
+                        let mut pos = input_state.cursor_position - 1;
+                        
+                        // Skip current whitespace/separators
+                        while pos > 0 && (chars[pos].is_whitespace() || is_word_separator(chars[pos])) {
+                            pos -= 1;
+                        }
+                        
+                        // Move to start of word
+                        while pos > 0 && !chars[pos - 1].is_whitespace() && !is_word_separator(chars[pos - 1]) {
+                            pos -= 1;
+                        }
+                        
+                        input_state.cursor_position = pos;
+                    }
+                    input_state.selection_start = None;
+                }
+                (KeyCode::Right, KeyModifiers::CONTROL) | (KeyCode::Right, KeyModifiers::ALT) => {
+                    if input_state.cursor_position < input_state.input.len() {
+                        let chars: Vec<char> = input_state.input.chars().collect();
+                        let mut pos = input_state.cursor_position;
+                        
+                        // Skip to end of current word
+                        while pos < chars.len() && !chars[pos].is_whitespace() && !is_word_separator(chars[pos]) {
+                            pos += 1;
+                        }
+                        
+                        // Skip whitespace/separators
+                        while pos < chars.len() && (chars[pos].is_whitespace() || is_word_separator(chars[pos])) {
+                            pos += 1;
+                        }
+                        
+                        input_state.cursor_position = pos;
+                    }
+                    input_state.selection_start = None;
+                }
+                
+                // Selection movement
+                (KeyCode::Left, KeyModifiers::SHIFT) => {
+                    if input_state.selection_start.is_none() {
+                        input_state.selection_start = Some(input_state.cursor_position);
+                    }
+                    if input_state.cursor_position > 0 {
+                        input_state.cursor_position -= 1;
+                    }
+                }
+                (KeyCode::Right, KeyModifiers::SHIFT) => {
+                    if input_state.selection_start.is_none() {
+                        input_state.selection_start = Some(input_state.cursor_position);
+                    }
+                    if input_state.cursor_position < input_state.input.len() {
+                        input_state.cursor_position += 1;
+                    }
+                }
+                (KeyCode::Home, KeyModifiers::SHIFT) => {
+                    if input_state.selection_start.is_none() {
+                        input_state.selection_start = Some(input_state.cursor_position);
+                    }
+                    input_state.cursor_position = 0;
+                }
+                (KeyCode::End, KeyModifiers::SHIFT) => {
+                    if input_state.selection_start.is_none() {
+                        input_state.selection_start = Some(input_state.cursor_position);
+                    }
+                    input_state.cursor_position = input_state.input.len();
+                }
+                
+                // Word selection with Ctrl+Shift+Arrow or Alt+Shift+Arrow
+                (KeyCode::Left, modifiers) if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT)) && modifiers.contains(KeyModifiers::SHIFT) => {
+                    if input_state.selection_start.is_none() {
+                        input_state.selection_start = Some(input_state.cursor_position);
+                    }
+                    if input_state.cursor_position > 0 {
+                        let chars: Vec<char> = input_state.input.chars().collect();
+                        let mut pos = input_state.cursor_position - 1;
+                        
+                        // Skip current whitespace/separators
+                        while pos > 0 && (chars[pos].is_whitespace() || is_word_separator(chars[pos])) {
+                            pos -= 1;
+                        }
+                        
+                        // Move to start of word
+                        while pos > 0 && !chars[pos - 1].is_whitespace() && !is_word_separator(chars[pos - 1]) {
+                            pos -= 1;
+                        }
+                        
+                        input_state.cursor_position = pos;
+                    }
+                }
+                (KeyCode::Right, modifiers) if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT)) && modifiers.contains(KeyModifiers::SHIFT) => {
+                    if input_state.selection_start.is_none() {
+                        input_state.selection_start = Some(input_state.cursor_position);
+                    }
+                    if input_state.cursor_position < input_state.input.len() {
+                        let chars: Vec<char> = input_state.input.chars().collect();
+                        let mut pos = input_state.cursor_position;
+                        
+                        // Skip to end of current word
+                        while pos < chars.len() && !chars[pos].is_whitespace() && !is_word_separator(chars[pos]) {
+                            pos += 1;
+                        }
+                        
+                        // Skip whitespace/separators
+                        while pos < chars.len() && (chars[pos].is_whitespace() || is_word_separator(chars[pos])) {
+                            pos += 1;
+                        }
+                        
+                        input_state.cursor_position = pos;
+                    }
+                }
+                
+                // Select all
+                (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                    input_state.selection_start = Some(0);
+                    input_state.cursor_position = input_state.input.len();
+                }
+                
+                // Ctrl+W - Unix-style delete word backwards
+                (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                    if input_state.selection_start.is_some() {
+                        Self::delete_input_selection(input_state);
+                    } else if input_state.cursor_position > 0 {
+                        let original_pos = input_state.cursor_position;
+                        let chars: Vec<char> = input_state.input.chars().collect();
+                        let mut pos = input_state.cursor_position;
+                        
+                        // Move back to find the start of deletion
+                        if pos > 0 && pos <= chars.len() {
+                            pos -= 1;
+                            
+                            // If we're on whitespace, delete all whitespace
+                            if chars[pos].is_whitespace() {
+                                while pos > 0 && chars[pos - 1].is_whitespace() {
+                                    pos -= 1;
+                                }
+                            }
+                            // Otherwise, delete the word
+                            else {
+                                // Skip to beginning of current word
+                                while pos > 0 && !chars[pos - 1].is_whitespace() && !is_word_separator(chars[pos - 1]) {
+                                    pos -= 1;
+                                }
+                            }
+                        }
+                        
+                        // Delete from pos to original_pos
+                        let delete_count = original_pos - pos;
+                        for _ in 0..delete_count {
+                            if pos < input_state.input.len() {
+                                input_state.input.remove(pos);
+                            }
+                        }
+                        input_state.cursor_position = pos;
+                    }
+                }
+                
+                // Copy/Cut/Paste
+                (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    if let Some(sel_start) = input_state.selection_start {
+                        let (start, end) = if sel_start < input_state.cursor_position {
+                            (sel_start, input_state.cursor_position)
+                        } else {
+                            (input_state.cursor_position, sel_start)
+                        };
+                        let selected_text: String = input_state.input.chars()
+                            .skip(start)
+                            .take(end - start)
+                            .collect();
+                        // TODO: Copy to clipboard
+                        let _ = selected_text;
+                    }
+                }
+                (KeyCode::Char('x'), KeyModifiers::CONTROL) => {
+                    if input_state.selection_start.is_some() {
+                        // TODO: Copy to clipboard before deleting
+                        Self::delete_input_selection(input_state);
+                    }
+                }
+                (KeyCode::Char('v'), KeyModifiers::CONTROL) => {
+                    // TODO: Paste from clipboard
+                }
+                
+                // Enter to submit
+                (KeyCode::Enter, KeyModifiers::NONE) => {
+                    // Execute the operation
+                    let operation = input_state.operation.clone();
+                    let target_path = input_state.target_path.clone();
+                    let input_text = input_state.input.clone();
+                    
+                    // Close the dialog first
+                    self.menu_system.close();
+                    
+                    // Perform the operation
+                    if !input_text.trim().is_empty() {
+                        self.execute_file_operation(&operation, &target_path, &input_text);
+                    }
+                }
+                
+                // Escape to cancel
+                (KeyCode::Esc, KeyModifiers::NONE) => {
+                    // Cancel the operation
+                    self.menu_system.close();
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    fn delete_input_selection(input_state: &mut crate::menu::InputDialogState) {
+        if let Some(sel_start) = input_state.selection_start {
+            let (start, end) = if sel_start < input_state.cursor_position {
+                (sel_start, input_state.cursor_position)
+            } else {
+                (input_state.cursor_position, sel_start)
+            };
+            
+            // Remove selected characters
+            for _ in start..end {
+                if start < input_state.input.len() {
+                    input_state.input.remove(start);
+                }
+            }
+            
+            input_state.cursor_position = start;
+            input_state.selection_start = None;
+        }
+    }
+
+    fn execute_file_operation(&mut self, operation: &str, target_path: &PathBuf, input: &str) {
+        if let Some(tree_view) = &mut self.tree_view {
+            let result = match operation {
+                "new_file" => {
+                    tree_view.create_file(target_path, input.trim())
+                        .map(|_| format!("Created file '{}'", input.trim()))
+                        .map_err(|e| format!("Failed to create file: {}", e))
+                }
+                "new_folder" => {
+                    tree_view.create_directory(target_path, input.trim())
+                        .map(|_| format!("Created directory '{}'", input.trim()))
+                        .map_err(|e| format!("Failed to create directory: {}", e))
+                }
+                "rename" => {
+                    tree_view.rename_file_or_directory(target_path, input.trim())
+                        .map(|_| format!("Renamed to '{}'", input.trim()))
+                        .map_err(|e| format!("Failed to rename: {}", e))
+                }
+                _ => return,
+            };
+            
+            match result {
+                Ok(message) => {
+                    self.set_status_message(message, Duration::from_secs(3));
+                }
+                Err(error) => {
+                    self.set_status_message(error, Duration::from_secs(5));
+                }
+            }
+        }
+    }
+
     fn handle_file_picker_scrollbar_click(&mut self, mouse: MouseEvent) {
         if let crate::menu::MenuState::FilePicker(picker_state) = &mut self.menu_system.state {
             let _modal_width = 70u16.min(self.terminal_size.0.saturating_sub(4));
@@ -1716,6 +2622,31 @@ impl App {
                 }
                 
                 // Focus tree view on click (after handling the click)
+                self.handle_command(EditorCommand::FocusTreeView);
+                return true;
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                if let Some(tree_view) = &mut self.tree_view {
+                    // Calculate which item was right-clicked
+                    let item_y = mouse.row - tree_area_start_y;
+                    let visible_items = tree_view.get_visible_items();
+                    let clicked_index = tree_view.scroll_offset + item_y as usize;
+                    
+                    if clicked_index < visible_items.len() {
+                        tree_view.selected_index = clicked_index;
+                        
+                        if let Some(selected_item) = tree_view.get_selected_item() {
+                            // Open context menu at mouse position
+                            self.menu_system.open_tree_context_menu(
+                                selected_item.path.clone(),
+                                selected_item.is_dir,
+                                (mouse.column, mouse.row)
+                            );
+                        }
+                    }
+                }
+                
+                // Focus tree view on right-click
                 self.handle_command(EditorCommand::FocusTreeView);
                 return true;
             }

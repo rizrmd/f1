@@ -8,6 +8,27 @@ pub enum MenuState {
     MainMenu(MenuComponent),
     CurrentTabMenu(MenuComponent),
     FilePicker(FilePickerState),
+    TreeContextMenu(TreeContextMenuState),
+    InputDialog(InputDialogState),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputDialogState {
+    pub prompt: String,
+    pub input: String,
+    pub operation: String, // "new_file", "new_folder", "rename"
+    pub target_path: PathBuf,
+    pub cursor_position: usize,
+    pub selection_start: Option<usize>,
+    pub hovered_button: Option<usize>, // 0 = OK, 1 = Cancel
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeContextMenuState {
+    pub menu: MenuComponent,
+    pub target_path: PathBuf,
+    pub is_directory: bool,
+    pub position: (u16, u16), // (x, y) position for the menu
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -370,6 +391,47 @@ impl MenuSystem {
     pub fn close(&mut self) {
         self.state = MenuState::Closed;
     }
+    
+    pub fn open_tree_context_menu(&mut self, path: PathBuf, is_directory: bool, position: (u16, u16)) {
+        let mut items = Vec::new();
+        
+        if is_directory {
+            items.push(MenuItem::new("New File", MenuAction::Custom("new_file".to_string())));
+            items.push(MenuItem::new("New Folder", MenuAction::Custom("new_folder".to_string())));
+        }
+        
+        items.push(MenuItem::new("Rename", MenuAction::Custom("rename".to_string())));
+        items.push(MenuItem::new("Delete", MenuAction::Custom("delete".to_string())));
+        
+        if !is_directory {
+            items.push(MenuItem::new("Open", MenuAction::Custom("open".to_string())));
+        }
+        
+        let menu = MenuComponent::new(items);
+        
+        let context_state = TreeContextMenuState {
+            menu,
+            target_path: path,
+            is_directory,
+            position,
+        };
+        
+        self.state = MenuState::TreeContextMenu(context_state);
+    }
+    
+    pub fn open_input_dialog(&mut self, prompt: String, operation: String, target_path: PathBuf) {
+        let input_state = InputDialogState {
+            prompt,
+            input: String::new(),
+            operation,
+            target_path,
+            cursor_position: 0,
+            selection_start: None,
+            hovered_button: None,
+        };
+        
+        self.state = MenuState::InputDialog(input_state);
+    }
 
     #[allow(dead_code)]
     pub fn is_open(&self) -> bool {
@@ -380,6 +442,7 @@ impl MenuSystem {
         match &mut self.state {
             MenuState::MainMenu(menu) => menu.move_up(),
             MenuState::CurrentTabMenu(menu) => menu.move_up(),
+            MenuState::TreeContextMenu(context_state) => context_state.menu.move_up(),
             _ => {}
         }
     }
@@ -388,6 +451,7 @@ impl MenuSystem {
         match &mut self.state {
             MenuState::MainMenu(menu) => menu.move_down(),
             MenuState::CurrentTabMenu(menu) => menu.move_down(),
+            MenuState::TreeContextMenu(context_state) => context_state.menu.move_down(),
             _ => {}
         }
     }
@@ -415,6 +479,23 @@ impl MenuSystem {
             }
             MenuState::CurrentTabMenu(menu) => {
                 if let Some(action) = menu.get_selected_action() {
+                    match action {
+                        MenuAction::Close => {
+                            self.close();
+                            None
+                        }
+                        MenuAction::Custom(action_name) => {
+                            let result = action_name.clone();
+                            self.close();
+                            Some(result)
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            MenuState::TreeContextMenu(context_state) => {
+                if let Some(action) = context_state.menu.get_selected_action() {
                     match action {
                         MenuAction::Close => {
                             self.close();
