@@ -45,14 +45,14 @@ impl Tab {
             .and_then(|n| n.to_str())
             .unwrap_or("untitled")
             .to_string();
-        
+
         // Check if this is a markdown file and activate preview mode by default
         let is_markdown = if let Some(ext) = path.extension() {
             ext == "md" || ext == "markdown"
         } else {
             name.ends_with(".md") || name.ends_with(".markdown")
         };
-        
+
         Self {
             name,
             path: Some(path),
@@ -90,14 +90,14 @@ impl Tab {
         // This allows manual scrolling to work without being overridden
         let cursor_line = self.cursor.position.line;
         let (viewport_line, viewport_col) = self.viewport_offset;
-        
+
         // Only adjust if cursor is completely outside the visible area
         if cursor_line < viewport_line {
             self.viewport_offset.0 = cursor_line;
         } else if cursor_line >= viewport_line + height {
             self.viewport_offset.0 = cursor_line.saturating_sub(height - 1);
         }
-        
+
         let cursor_col = self.cursor.position.column;
         if cursor_col < viewport_col {
             self.viewport_offset.1 = cursor_col;
@@ -105,23 +105,23 @@ impl Tab {
             self.viewport_offset.1 = cursor_col.saturating_sub(79);
         }
     }
-    
+
     pub fn ensure_cursor_visible(&mut self, height: usize) {
         // Force viewport to show cursor (used after cursor movement)
         self.update_viewport(height);
     }
-    
+
     pub fn toggle_preview_mode(&mut self) {
         // Only allow preview mode for markdown files
         if self.is_markdown() {
             self.preview_mode = !self.preview_mode;
         }
     }
-    
+
     pub fn toggle_word_wrap(&mut self) {
         self.word_wrap = !self.word_wrap;
     }
-    
+
     pub fn is_markdown(&self) -> bool {
         // Check if the file has a markdown extension
         if let Some(path) = &self.path {
@@ -132,26 +132,26 @@ impl Tab {
         // Also check if the tab name ends with .md
         self.name.ends_with(".md") || self.name.ends_with(".markdown")
     }
-    
+
     pub fn save_state(&mut self) {
         // Save current state before making changes
         let state = EditorState {
             buffer: self.buffer.clone(),
             cursor: self.cursor.clone(),
         };
-        
+
         // Add to undo stack
         self.undo_stack.push(state);
-        
+
         // Limit undo history size
         if self.undo_stack.len() > self.max_undo_history {
             self.undo_stack.remove(0);
         }
-        
+
         // Clear redo stack when new changes are made
         self.redo_stack.clear();
     }
-    
+
     pub fn undo(&mut self) -> bool {
         if let Some(previous_state) = self.undo_stack.pop() {
             // Save current state to redo stack
@@ -160,22 +160,22 @@ impl Tab {
                 cursor: self.cursor.clone(),
             };
             self.redo_stack.push(current_state);
-            
+
             // Restore previous state
             self.buffer = previous_state.buffer;
             self.cursor = previous_state.cursor;
-            
+
             // Clear modified flag if we're back to the original state (no more undo history)
             if self.undo_stack.is_empty() {
                 self.modified = false;
             }
-            
+
             true
         } else {
             false
         }
     }
-    
+
     pub fn redo(&mut self) -> bool {
         if let Some(next_state) = self.redo_stack.pop() {
             // Save current state to undo stack
@@ -184,14 +184,14 @@ impl Tab {
                 cursor: self.cursor.clone(),
             };
             self.undo_stack.push(current_state);
-            
+
             // Restore next state
             self.buffer = next_state.buffer;
             self.cursor = next_state.cursor;
-            
+
             // Mark as modified
             self.modified = true;
-            
+
             true
         } else {
             false
@@ -223,7 +223,7 @@ impl TabManager {
         if self.tabs.len() <= 1 {
             return false;
         }
-        
+
         if index < self.tabs.len() {
             self.tabs.remove(index);
             if self.active_index >= self.tabs.len() {
@@ -285,7 +285,7 @@ impl TabManager {
         if self.tabs.is_empty() {
             return;
         }
-        
+
         // Keep only the active tab
         let active_tab = self.tabs.remove(self.active_index);
         self.tabs.clear();

@@ -15,7 +15,13 @@ impl StatusBar {
         Self {}
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, tab_manager: &TabManager, status_message: Option<&String>) {
+    pub fn draw(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        tab_manager: &TabManager,
+        status_message: Option<&String>,
+    ) {
         if let Some(tab) = tab_manager.active_tab() {
             let cursor_pos = format!(
                 " L{}:C{} ",
@@ -39,7 +45,7 @@ impl StatusBar {
             };
 
             let f1_menu = " ☰ F1 ";
-            
+
             // Add preview/edit toggle indicator for markdown files (shows current state)
             let preview_indicator = if tab.is_markdown() {
                 if tab.preview_mode {
@@ -50,7 +56,7 @@ impl StatusBar {
             } else {
                 ""
             };
-            
+
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
@@ -62,44 +68,32 @@ impl StatusBar {
                 .split(area);
 
             let f1_status = Paragraph::new(Line::from(vec![Span::raw(f1_menu)]))
-                .style(
-                    Style::default()
-                        .bg(Color::Yellow)
-                        .fg(Color::Black),
-                );
+                .style(Style::default().bg(Color::Yellow).fg(Color::Black));
 
             let middle_status = if status_message.is_some() {
                 // Use warning text color but same background for status messages
-                Paragraph::new(Line::from(vec![Span::raw(status_text)]))
-                    .style(
-                        Style::default()
-                            .bg(Color::Rgb(40, 40, 40))
-                            .fg(Color::Yellow),
-                    )
+                Paragraph::new(Line::from(vec![Span::raw(status_text)])).style(
+                    Style::default()
+                        .bg(Color::Rgb(40, 40, 40))
+                        .fg(Color::Yellow),
+                )
             } else {
                 // Use normal colors for file info
                 Paragraph::new(Line::from(vec![Span::raw(status_text)]))
-                    .style(
-                        Style::default()
-                            .bg(Color::Rgb(40, 40, 40))
-                            .fg(Color::White),
-                    )
+                    .style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::White))
             };
 
             let right_status = Paragraph::new(Line::from(vec![Span::raw(cursor_pos)]))
-                .style(
-                    Style::default()
-                        .bg(Color::Rgb(40, 40, 40))
-                        .fg(Color::White),
-                );
+                .style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::White));
 
             let preview_status = if !preview_indicator.is_empty() {
-                Some(Paragraph::new(Line::from(vec![Span::raw(preview_indicator)]))
-                    .style(
+                Some(
+                    Paragraph::new(Line::from(vec![Span::raw(preview_indicator)])).style(
                         Style::default()
                             .bg(Color::Rgb(100, 50, 200)) // Purple background for preview
                             .fg(Color::White),
-                    ))
+                    ),
+                )
             } else {
                 None
             };

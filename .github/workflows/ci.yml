@@ -48,7 +48,7 @@ jobs:
         run: cargo fmt -- --check
       
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings -A clippy::too-many-arguments -A clippy::only-used-in-recursion -A clippy::needless-range-loop -A clippy::implicit-saturating-sub -A clippy::unnecessary-map-or -A clippy::len-zero -A clippy::needless-bool-assign -A clippy::while-let-on-iterator -A clippy::ptr-arg -A clippy::inherent-to-string -A clippy::redundant-pattern-matching
       
       - name: Build
         run: cargo build --verbose

@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GitIgnore {
@@ -34,14 +34,14 @@ impl GitIgnore {
                 }
             }
         }
-        
+
         // Add common default patterns
         self.add_default_patterns();
     }
 
     fn parse_line(&self, line: &str) -> Option<GitIgnorePattern> {
         let line = line.trim();
-        
+
         // Skip empty lines and comments
         if line.is_empty() || line.starts_with('#') {
             return None;
@@ -80,14 +80,7 @@ impl GitIgnore {
 
     fn add_default_patterns(&mut self) {
         // Add some common patterns that should always be ignored
-        let default_patterns = vec![
-            ".git",
-            ".DS_Store",
-            "Thumbs.db",
-            "*.swp",
-            "*.swo",
-            "*~",
-        ];
+        let default_patterns = vec![".git", ".DS_Store", "Thumbs.db", "*.swp", "*.swo", "*~"];
 
         for pattern in default_patterns {
             self.patterns.push(GitIgnorePattern {
@@ -141,7 +134,7 @@ impl GitIgnore {
 
         // For relative patterns, check if any part of the path matches
         let path_parts: Vec<&str> = path.split('/').collect();
-        
+
         // Try matching against the full path
         if self.glob_match(pattern_str, path) {
             return true;
@@ -168,7 +161,7 @@ impl GitIgnore {
     fn glob_match(&self, pattern: &str, text: &str) -> bool {
         // Simple glob matching implementation
         // This is a basic implementation - could be enhanced with a proper glob library
-        
+
         if pattern == text {
             return true;
         }
@@ -183,11 +176,17 @@ impl GitIgnore {
     fn wildcard_match(&self, pattern: &str, text: &str) -> bool {
         let pattern_chars: Vec<char> = pattern.chars().collect();
         let text_chars: Vec<char> = text.chars().collect();
-        
+
         self.wildcard_match_recursive(&pattern_chars, &text_chars, 0, 0)
     }
 
-    fn wildcard_match_recursive(&self, pattern: &[char], text: &[char], p: usize, t: usize) -> bool {
+    fn wildcard_match_recursive(
+        &self,
+        pattern: &[char],
+        text: &[char],
+        p: usize,
+        t: usize,
+    ) -> bool {
         if p >= pattern.len() {
             return t >= text.len();
         }

@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use crate::ui::{MenuComponent, MenuItem, MenuAction};
 use crate::gitignore::GitIgnore;
+use crate::ui::{MenuAction, MenuComponent, MenuItem};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuState {
@@ -53,7 +53,7 @@ pub struct FileItem {
 impl FilePickerState {
     pub fn new() -> Self {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        
+
         // Create a temporary state to use the find_repo_root method
         let temp_state = Self {
             search_query: String::new(),
@@ -64,10 +64,10 @@ impl FilePickerState {
             all_items: Vec::new(),
             gitignore: GitIgnore::new(current_dir.clone()), // Temporary
         };
-        
+
         let repo_root = temp_state.find_repo_root(&current_dir);
         let gitignore = GitIgnore::new(repo_root);
-        
+
         let mut state = Self {
             search_query: String::new(),
             filtered_items: Vec::new(),
@@ -83,7 +83,7 @@ impl FilePickerState {
 
     pub fn load_current_directory(&mut self) {
         self.all_items.clear();
-        
+
         // Add parent directory entry if not at root
         if self.current_dir.parent().is_some() {
             self.all_items.push(FileItem {
@@ -93,29 +93,30 @@ impl FilePickerState {
                 relative_path: "..".to_string(),
             });
         }
-        
+
         // Load directory contents
         if let Ok(entries) = std::fs::read_dir(&self.current_dir) {
             let mut dirs = Vec::new();
             let mut files = Vec::new();
-            
+
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
-                let name = path.file_name()
+                let name = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
-                
+
                 // Skip hidden files (starting with .)
                 if name.starts_with('.') && name != ".." {
                     continue;
                 }
-                
+
                 // Skip gitignored files
                 if self.gitignore.is_ignored(&path) {
                     continue;
                 }
-                
+
                 let is_dir = path.is_dir();
                 let item = FileItem {
                     path: path.clone(),
@@ -123,23 +124,23 @@ impl FilePickerState {
                     is_dir,
                     relative_path: String::new(), // Will be set during search
                 };
-                
+
                 if is_dir {
                     dirs.push(item);
                 } else {
                     files.push(item);
                 }
             }
-            
+
             // Sort directories and files alphabetically
             dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
             files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-            
+
             // Add directories first, then files
             self.all_items.extend(dirs);
             self.all_items.extend(files);
         }
-        
+
         self.filtered_items = self.all_items.clone();
         self.selected_index = 0;
     }
@@ -151,14 +152,14 @@ impl FilePickerState {
             // Fuzzy search in current directory and subdirectories
             let query = self.search_query.to_lowercase();
             self.filtered_items.clear();
-            
+
             // Search in current directory
             for item in &self.all_items {
                 if item.name != ".." && fuzzy_match(&item.name.to_lowercase(), &query) {
                     self.filtered_items.push(item.clone());
                 }
             }
-            
+
             // Search in subdirectories (recursive)
             let current_dir = self.current_dir.clone();
             self.search_recursive(&current_dir, &query, 0, 3); // Max depth 3
@@ -166,32 +167,36 @@ impl FilePickerState {
         self.selected_index = 0;
         self.hovered_index = None; // Clear hover when filtering
     }
-    
+
     fn search_recursive(&mut self, dir: &PathBuf, query: &str, depth: usize, max_depth: usize) {
         if depth >= max_depth {
             return;
         }
-        
+
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
-                let name = path.file_name()
+                let name = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
-                
+
                 // Skip hidden files
                 if name.starts_with('.') {
                     continue;
                 }
-                
-                let relative = path.strip_prefix(&self.current_dir)
+
+                let relative = path
+                    .strip_prefix(&self.current_dir)
                     .ok()
                     .and_then(|p| p.to_str())
                     .unwrap_or("")
                     .to_string();
-                
-                if fuzzy_match(&name.to_lowercase(), query) || fuzzy_match(&relative.to_lowercase(), query) {
+
+                if fuzzy_match(&name.to_lowercase(), query)
+                    || fuzzy_match(&relative.to_lowercase(), query)
+                {
                     self.filtered_items.push(FileItem {
                         path: path.clone(),
                         name,
@@ -199,7 +204,7 @@ impl FilePickerState {
                         relative_path: relative,
                     });
                 }
-                
+
                 // Recursively search directories
                 if path.is_dir() {
                     self.search_recursive(&path, query, depth + 1, max_depth);
@@ -207,18 +212,18 @@ impl FilePickerState {
             }
         }
     }
-    
+
     pub fn enter_directory(&mut self, dir: PathBuf) {
         self.current_dir = dir.clone();
         self.search_query.clear();
         self.hovered_index = None; // Clear hover when changing directory
-        
+
         // Update gitignore for the new directory (find repo root)
         self.gitignore = GitIgnore::new(self.find_repo_root(&dir));
-        
+
         self.load_current_directory();
     }
-    
+
     fn find_repo_root(&self, path: &PathBuf) -> PathBuf {
         let mut current = path.clone();
         loop {
@@ -233,7 +238,7 @@ impl FilePickerState {
             }
         }
     }
-    
+
     pub fn go_up(&mut self) {
         if let Some(parent) = self.current_dir.parent() {
             self.enter_directory(parent.to_path_buf());
@@ -262,7 +267,7 @@ impl FilePickerState {
 fn fuzzy_match(text: &str, pattern: &str) -> bool {
     let mut pattern_chars = pattern.chars();
     let mut current_char = pattern_chars.next();
-    
+
     for text_char in text.chars() {
         if let Some(pc) = current_char {
             if text_char == pc {
@@ -272,7 +277,7 @@ fn fuzzy_match(text: &str, pattern: &str) -> bool {
             return true; // All pattern chars matched
         }
     }
-    
+
     current_char.is_none() // True if all pattern chars were matched
 }
 
@@ -288,7 +293,12 @@ impl MenuSystem {
         }
     }
 
-    pub fn toggle_main_menu(&mut self, _is_markdown: bool, _in_preview_mode: bool, word_wrap_enabled: bool) {
+    pub fn toggle_main_menu(
+        &mut self,
+        _is_markdown: bool,
+        _in_preview_mode: bool,
+        word_wrap_enabled: bool,
+    ) {
         self.state = match self.state {
             MenuState::Closed => {
                 let word_wrap_text = if word_wrap_enabled {
@@ -296,19 +306,22 @@ impl MenuSystem {
                 } else {
                     "Enable Word Wrap"
                 };
-                
+
                 let items = vec![
                     MenuItem::new("Current Tab", MenuAction::Custom("current_tab".to_string()))
                         .with_shortcut("Ctrl+G"),
                     MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                         .with_shortcut("Ctrl+P"),
-                    MenuItem::new(word_wrap_text, MenuAction::Custom("toggle_word_wrap".to_string()))
-                        .with_shortcut("Alt+W"),
+                    MenuItem::new(
+                        word_wrap_text,
+                        MenuAction::Custom("toggle_word_wrap".to_string()),
+                    )
+                    .with_shortcut("Alt+W"),
                     MenuItem::new("Quit", MenuAction::Custom("quit".to_string()))
                         .with_shortcut("Ctrl+Q"),
                     MenuItem::new("Cancel", MenuAction::Close),
                 ];
-                
+
                 let menu = MenuComponent::new(items)
                     .with_width(30)
                     .with_colors(ratatui::style::Color::Yellow, ratatui::style::Color::Black);
@@ -319,25 +332,32 @@ impl MenuSystem {
     }
 
     #[allow(dead_code)]
-    pub fn open_main_menu(&mut self, _is_markdown: bool, _in_preview_mode: bool, word_wrap_enabled: bool) {
+    pub fn open_main_menu(
+        &mut self,
+        _is_markdown: bool,
+        _in_preview_mode: bool,
+        word_wrap_enabled: bool,
+    ) {
         let word_wrap_text = if word_wrap_enabled {
             "Disable Word Wrap"
         } else {
             "Enable Word Wrap"
         };
-        
+
         let items = vec![
             MenuItem::new("Current Tab", MenuAction::Custom("current_tab".to_string()))
                 .with_shortcut("Ctrl+G"),
             MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                 .with_shortcut("Ctrl+P"),
-            MenuItem::new(word_wrap_text, MenuAction::Custom("toggle_word_wrap".to_string()))
-                .with_shortcut("Alt+W"),
-            MenuItem::new("Quit", MenuAction::Custom("quit".to_string()))
-                .with_shortcut("Ctrl+Q"),
+            MenuItem::new(
+                word_wrap_text,
+                MenuAction::Custom("toggle_word_wrap".to_string()),
+            )
+            .with_shortcut("Alt+W"),
+            MenuItem::new("Quit", MenuAction::Custom("quit".to_string())).with_shortcut("Ctrl+Q"),
             MenuItem::new("Cancel", MenuAction::Close),
         ];
-        
+
         let menu = MenuComponent::new(items)
             .with_width(30)
             .with_colors(ratatui::style::Color::Yellow, ratatui::style::Color::Black);
@@ -352,8 +372,11 @@ impl MenuSystem {
                 .with_shortcut("Ctrl+["),
             MenuItem::new("Close Tab", MenuAction::Custom("close_tab".to_string()))
                 .with_shortcut("Ctrl+W"),
-            MenuItem::new("Close Other Tab", MenuAction::Custom("close_other_tab".to_string()))
-                .with_shortcut("Ctrl+Shift+W"),
+            MenuItem::new(
+                "Close Other Tab",
+                MenuAction::Custom("close_other_tab".to_string()),
+            )
+            .with_shortcut("Ctrl+Shift+W"),
             MenuItem::new("Cancel", MenuAction::Close),
         ];
         let menu = MenuComponent::new(items)
@@ -367,60 +390,89 @@ impl MenuSystem {
         let picker_state = FilePickerState::new();
         self.state = MenuState::FilePicker(picker_state);
     }
-    
+
     pub fn open_file_picker_at_path(&mut self, path: Option<PathBuf>) {
         let mut picker_state = FilePickerState::new();
-        
+
         // If a path is provided, navigate to its directory
         if let Some(file_path) = path {
             let dir = if file_path.is_dir() {
                 file_path
             } else {
-                file_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| {
-                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                })
+                file_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    })
             };
             picker_state.enter_directory(dir);
         }
-        
+
         self.state = MenuState::FilePicker(picker_state);
     }
 
     pub fn close(&mut self) {
         self.state = MenuState::Closed;
     }
-    
-    pub fn open_tree_context_menu(&mut self, path: PathBuf, is_directory: bool, position: (u16, u16)) {
+
+    pub fn open_tree_context_menu(
+        &mut self,
+        path: PathBuf,
+        is_directory: bool,
+        position: (u16, u16),
+    ) {
         let mut items = Vec::new();
-        
+
         if is_directory {
-            items.push(MenuItem::new("New File", MenuAction::Custom("new_file".to_string())));
-            items.push(MenuItem::new("New Folder", MenuAction::Custom("new_folder".to_string())));
+            items.push(MenuItem::new(
+                "New File",
+                MenuAction::Custom("new_file".to_string()),
+            ));
+            items.push(MenuItem::new(
+                "New Folder",
+                MenuAction::Custom("new_folder".to_string()),
+            ));
         }
-        
+
         if !is_directory {
-            items.push(MenuItem::new("Open", MenuAction::Custom("open".to_string())));
+            items.push(MenuItem::new(
+                "Open",
+                MenuAction::Custom("open".to_string()),
+            ));
         }
-        
+
         // File management operations
-        items.push(MenuItem::new("Copy", MenuAction::Custom("copy".to_string())));
+        items.push(MenuItem::new(
+            "Copy",
+            MenuAction::Custom("copy".to_string()),
+        ));
         items.push(MenuItem::new("Cut", MenuAction::Custom("cut".to_string())));
-        items.push(MenuItem::new("Paste", MenuAction::Custom("paste".to_string())));
-        items.push(MenuItem::new("Rename", MenuAction::Custom("rename".to_string())));
-        items.push(MenuItem::new("Delete", MenuAction::Custom("delete".to_string())));
-        
+        items.push(MenuItem::new(
+            "Paste",
+            MenuAction::Custom("paste".to_string()),
+        ));
+        items.push(MenuItem::new(
+            "Rename",
+            MenuAction::Custom("rename".to_string()),
+        ));
+        items.push(MenuItem::new(
+            "Delete",
+            MenuAction::Custom("delete".to_string()),
+        ));
+
         let menu = MenuComponent::new(items);
-        
+
         let context_state = TreeContextMenuState {
             menu,
             target_path: path,
             is_directory,
             position,
         };
-        
+
         self.state = MenuState::TreeContextMenu(context_state);
     }
-    
+
     pub fn open_input_dialog(&mut self, prompt: String, operation: String, target_path: PathBuf) {
         let input_state = InputDialogState {
             prompt,
@@ -431,7 +483,7 @@ impl MenuSystem {
             selection_start: None,
             hovered_button: None,
         };
-        
+
         self.state = MenuState::InputDialog(input_state);
     }
 
@@ -513,8 +565,7 @@ impl MenuSystem {
                     None
                 }
             }
-            _ => None
+            _ => None,
         }
     }
-
 }

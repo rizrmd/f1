@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, Paragraph},
@@ -61,7 +61,6 @@ impl MenuComponent {
         self
     }
 
-
     pub fn move_up(&mut self) {
         if self.selected_index > 0 {
             self.selected_index -= 1;
@@ -86,7 +85,7 @@ impl MenuComponent {
         for (i, item) in self.items.iter().enumerate() {
             let is_selected = i == self.selected_index;
             let is_hovered = self.hovered_index == Some(i);
-            
+
             let style = if is_selected {
                 // Selected item - white background
                 Style::default()
@@ -111,8 +110,8 @@ impl MenuComponent {
                 let available_space = self.width as usize - 2; // -2 for left and right padding
                 let shortcut_len = shortcut.len();
                 let item_len = item.label.len();
-                
-                if item_len + shortcut_len + 1 <= available_space {
+
+                if item_len + shortcut_len < available_space {
                     // Enough space to separate item and shortcut
                     let spaces_needed = available_space - item_len - shortcut_len;
                     format!(" {}{}{} ", item.label, " ".repeat(spaces_needed), shortcut)
@@ -125,7 +124,12 @@ impl MenuComponent {
                         item.label.clone()
                     };
                     let spaces_needed = available_space - truncated_item.len() - shortcut_len;
-                    format!(" {}{}{} ", truncated_item, " ".repeat(spaces_needed), shortcut)
+                    format!(
+                        " {}{}{} ",
+                        truncated_item,
+                        " ".repeat(spaces_needed),
+                        shortcut
+                    )
                 }
             } else {
                 let mut text = format!(" {}", item.label);
@@ -135,7 +139,7 @@ impl MenuComponent {
                 text.truncate(self.width as usize);
                 text
             };
-            
+
             lines.push(Line::from(Span::styled(line_text, style)));
         }
 
@@ -144,8 +148,7 @@ impl MenuComponent {
     }
 
     pub fn is_position_inside(&self, area: &Rect, x: u16, y: u16) -> bool {
-        x >= area.x && x < area.x + area.width && 
-        y >= area.y && y < area.y + area.height
+        x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height
     }
 
     pub fn get_clicked_item(&self, area: &Rect, x: u16, y: u16) -> Option<usize> {

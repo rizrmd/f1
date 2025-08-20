@@ -5,19 +5,21 @@ pub fn get_file_icon(path: &Path) -> &'static str {
     if path.is_dir() {
         return "📁";
     }
-    
+
     // Get file extension
-    let extension = path.extension()
+    let extension = path
+        .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_lowercase();
-    
+
     // Get file name for special cases
-    let file_name = path.file_name()
+    let file_name = path
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("")
         .to_lowercase();
-    
+
     // Check for special file names first
     match file_name.as_str() {
         "readme.md" | "readme.txt" | "readme" => "📖",
@@ -66,7 +68,7 @@ pub fn get_file_icon(path: &Path) -> &'static str {
                 "nim" => "👑",
                 "cr" => "💎",
                 "zig" => "⚡",
-                
+
                 // Web technologies
                 "html" | "htm" => "🌐",
                 "css" => "🎨",
@@ -75,7 +77,7 @@ pub fn get_file_icon(path: &Path) -> &'static str {
                 "vue" => "💚",
                 "svelte" => "🧡",
                 "angular" => "🅰️",
-                
+
                 // Data formats
                 "json" => "📊",
                 "xml" => "📄",
@@ -84,7 +86,7 @@ pub fn get_file_icon(path: &Path) -> &'static str {
                 "ini" | "cfg" | "conf" => "⚙️",
                 "csv" => "📊",
                 "sql" => "🗃️",
-                
+
                 // Documentation
                 "md" | "markdown" => "📝",
                 "txt" => "📄",
@@ -93,32 +95,32 @@ pub fn get_file_icon(path: &Path) -> &'static str {
                 "doc" | "docx" => "📘",
                 "xls" | "xlsx" => "📗",
                 "ppt" | "pptx" => "📙",
-                
+
                 // Images
                 "png" | "jpg" | "jpeg" | "gif" | "bmp" | "tiff" => "🖼️",
                 "svg" => "🎨",
                 "ico" => "🖼️",
                 "webp" => "🖼️",
-                
+
                 // Audio/Video
                 "mp3" | "wav" | "flac" | "aac" => "🎵",
                 "mp4" | "avi" | "mkv" | "mov" | "wmv" => "🎬",
-                
+
                 // Archives
                 "zip" | "rar" | "7z" | "tar" | "gz" | "xz" | "bz2" => "📦",
-                
+
                 // Scripts
                 "sh" | "bash" | "zsh" | "fish" => "📜",
                 "bat" | "cmd" => "📜",
                 "ps1" => "📜",
-                
+
                 // Other
                 "log" => "📋",
                 "lock" => "🔒",
                 "key" | "pem" | "crt" | "cert" => "🔑",
                 "tmp" | "temp" => "🗑️",
                 "bak" | "backup" => "💾",
-                
+
                 // Default for unknown files
                 _ => "📄",
             }
@@ -141,12 +143,13 @@ pub fn get_file_type_indicator(path: &Path) -> &'static str {
     if path.is_dir() {
         return "D";
     }
-    
-    let extension = path.extension()
+
+    let extension = path
+        .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_lowercase();
-    
+
     match extension.as_str() {
         "rs" => "R",
         "js" | "mjs" => "J",

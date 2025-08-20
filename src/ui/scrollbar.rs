@@ -25,10 +25,11 @@ impl ScrollbarState {
         if self.content_length <= self.viewport_size {
             return 0;
         }
-        
+
         let ratio = click_y as f64 / track_size as f64;
         let target_line = (self.content_length as f64 * ratio) as usize;
-        target_line.saturating_sub(self.viewport_size / 2)
+        target_line
+            .saturating_sub(self.viewport_size / 2)
             .min(self.content_length.saturating_sub(self.viewport_size))
     }
 
@@ -37,10 +38,10 @@ impl ScrollbarState {
         if !self.needs_scrollbar() {
             return false;
         }
-        
+
         let thumb_size = self.thumb_size(track_size);
         let thumb_position = self.thumb_position(track_size);
-        
+
         y >= thumb_position && y < thumb_position + thumb_size
     }
 
@@ -153,13 +154,13 @@ impl Widget for VerticalScrollbar {
         for y in 0..area.height {
             let row = y as usize;
             let is_thumb = row >= thumb_position && row < thumb_position + thumb_size;
-            
+
             let symbol = if is_thumb {
                 self.track_symbols.thumb
             } else {
                 self.track_symbols.track
             };
-            
+
             let style = if is_thumb {
                 self.thumb_style
             } else {
@@ -247,13 +248,13 @@ impl Widget for HorizontalScrollbar {
         for x in 0..area.width {
             let col = x as usize;
             let is_thumb = col >= thumb_position && col < thumb_position + thumb_size;
-            
+
             let symbol = if is_thumb {
                 self.track_symbols.thumb
             } else {
                 self.track_symbols.track
             };
-            
+
             let style = if is_thumb {
                 self.thumb_style
             } else {

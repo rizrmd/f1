@@ -8,9 +8,7 @@ pub struct RopeBuffer {
 
 impl RopeBuffer {
     pub fn new() -> Self {
-        Self {
-            rope: Rope::new(),
-        }
+        Self { rope: Rope::new() }
     }
 
     pub fn from_str(text: &str) -> Self {
@@ -43,11 +41,9 @@ impl RopeBuffer {
         self.rope.line(line_idx)
     }
 
-
     pub fn line_to_char(&self, line_idx: usize) -> usize {
         self.rope.line_to_char(line_idx)
     }
-
 
     pub fn to_string(&self) -> String {
         self.rope.to_string()
@@ -65,5 +61,4 @@ impl RopeBuffer {
     pub fn slice(&self, range: Range<usize>) -> ropey::RopeSlice<'_> {
         self.rope.slice(range)
     }
-
 }

@@ -28,7 +28,6 @@ impl Cursor {
         }
     }
 
-
     pub fn move_left(&mut self, buffer: &RopeBuffer) {
         if self.position.column > 0 {
             self.position.column -= 1;
@@ -55,7 +54,7 @@ impl Cursor {
         if self.position.line > 0 {
             self.position.line -= 1;
             let line_len = buffer.get_line_text(self.position.line).len();
-            
+
             if let Some(desired) = self.desired_column {
                 self.position.column = desired.min(line_len);
             } else {
@@ -69,7 +68,7 @@ impl Cursor {
         if self.position.line < buffer.len_lines().saturating_sub(1) {
             self.position.line += 1;
             let line_len = buffer.get_line_text(self.position.line).len();
-            
+
             if let Some(desired) = self.desired_column {
                 self.position.column = desired.min(line_len);
             } else {
@@ -93,30 +92,38 @@ impl Cursor {
     pub fn move_word_left(&mut self, buffer: &RopeBuffer) {
         let line_text = buffer.get_line_text(self.position.line);
         let chars: Vec<char> = line_text.chars().collect();
-        
+
         if self.position.column > 0 && !chars.is_empty() {
             let mut pos = self.position.column.min(chars.len());
-            
+
             // If we're past the end of line, move to end
             if pos > chars.len() {
                 pos = chars.len();
             }
-            
+
             // Move left by one to start
             if pos > 0 {
                 pos -= 1;
             }
-            
+
             // Skip whitespace backwards
-            while pos > 0 && chars.get(pos).map_or(false, |c| !c.is_alphanumeric() && *c != '_') {
+            while pos > 0
+                && chars
+                    .get(pos)
+                    .map_or(false, |c| !c.is_alphanumeric() && *c != '_')
+            {
                 pos -= 1;
             }
-            
+
             // Skip word characters backwards
-            while pos > 0 && chars.get(pos - 1).map_or(false, |c| c.is_alphanumeric() || *c == '_') {
+            while pos > 0
+                && chars
+                    .get(pos - 1)
+                    .map_or(false, |c| c.is_alphanumeric() || *c == '_')
+            {
                 pos -= 1;
             }
-            
+
             self.position.column = pos;
         } else if self.position.line > 0 {
             self.position.line -= 1;
@@ -129,20 +136,28 @@ impl Cursor {
         let line_text = buffer.get_line_text(self.position.line);
         let chars: Vec<char> = line_text.chars().collect();
         let line_len = chars.len();
-        
+
         if self.position.column < line_len {
             let mut pos = self.position.column;
-            
+
             // Skip current word characters
-            while pos < line_len && chars.get(pos).map_or(false, |c| c.is_alphanumeric() || *c == '_') {
+            while pos < line_len
+                && chars
+                    .get(pos)
+                    .map_or(false, |c| c.is_alphanumeric() || *c == '_')
+            {
                 pos += 1;
             }
-            
+
             // Skip whitespace and punctuation
-            while pos < line_len && chars.get(pos).map_or(false, |c| !c.is_alphanumeric() && *c != '_') {
+            while pos < line_len
+                && chars
+                    .get(pos)
+                    .map_or(false, |c| !c.is_alphanumeric() && *c != '_')
+            {
                 pos += 1;
             }
-            
+
             self.position.column = pos;
         } else if self.position.line < buffer.len_lines().saturating_sub(1) {
             self.position.line += 1;
@@ -173,7 +188,7 @@ impl Cursor {
     pub fn get_selection(&self) -> Option<(Position, Position)> {
         if let Some(start) = self.selection_start {
             let end = self.position;
-            
+
             // Ensure start comes before end
             if start.line < end.line || (start.line == end.line && start.column <= end.column) {
                 Some((start, end))
@@ -270,44 +285,47 @@ impl Cursor {
     pub fn select_word_at_position(&mut self, buffer: &RopeBuffer) {
         let line_text = buffer.get_line_text(self.position.line);
         let chars: Vec<char> = line_text.chars().collect();
-        
+
         if chars.is_empty() {
             return;
         }
-        
+
         // Handle position at end of line
         let actual_column = if self.position.column >= chars.len() {
-            if chars.len() > 0 { chars.len() - 1 } else { return; }
+            if chars.len() > 0 {
+                chars.len() - 1
+            } else {
+                return;
+            }
         } else {
             self.position.column
         };
-        
+
         let current_char = chars[actual_column];
-        
+
         // If not on a word character, don't select anything
         if !is_word_char(current_char) {
             return;
         }
-        
+
         // Find word boundaries
         let mut start_col = actual_column;
         let mut end_col = actual_column;
-        
+
         // Move start backwards to beginning of word
         while start_col > 0 && is_word_char(chars[start_col - 1]) {
             start_col -= 1;
         }
-        
+
         // Move end forwards to end of word
         while end_col < chars.len() && is_word_char(chars[end_col]) {
             end_col += 1;
         }
-        
+
         // Set selection
         self.selection_start = Some(Position::new(self.position.line, start_col));
         self.position = Position::new(self.position.line, end_col);
     }
-
 }
 
 fn is_word_char(ch: char) -> bool {
