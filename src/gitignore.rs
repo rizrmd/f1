@@ -108,11 +108,7 @@ impl GitIgnore {
 
         for pattern in &self.patterns {
             if self.matches_pattern(pattern, &path_str, is_directory) {
-                if pattern.is_negation {
-                    ignored = false;
-                } else {
-                    ignored = true;
-                }
+                ignored = !pattern.is_negation;
             }
         }
 
@@ -180,6 +176,7 @@ impl GitIgnore {
         self.wildcard_match_recursive(&pattern_chars, &text_chars, 0, 0)
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn wildcard_match_recursive(
         &self,
         pattern: &[char],

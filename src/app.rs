@@ -55,6 +55,12 @@ pub struct App {
     pub status_message: Option<String>,
     status_message_expires: Option<Instant>,
     pending_delete_path: Option<PathBuf>,
+    pub global_word_wrap: bool,
+    last_scroll_time: Option<Instant>,
+    scroll_acceleration: usize,
+    dragging_tab: Option<usize>,  // Index of tab being dragged
+    drag_start_x: u16,  // Starting X position of drag
+    tab_was_active_on_click: bool,  // Whether the tab was already active when clicked
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,7 +75,7 @@ impl App {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let tree_view = TreeView::new(current_dir, 30).ok();
 
-        Self {
+        let mut app = Self {
             tab_manager: TabManager::new(),
             running: true,
             ui: UI::new(),
@@ -93,7 +99,20 @@ impl App {
             status_message: None,
             status_message_expires: None,
             pending_delete_path: None,
+            global_word_wrap: false,
+            last_scroll_time: None,
+            scroll_acceleration: 1,
+            dragging_tab: None,
+            drag_start_x: 0,
+            tab_was_active_on_click: false,
+        };
+        
+        // Apply global word wrap to initial tab
+        if let Some(tab) = app.tab_manager.active_tab_mut() {
+            tab.word_wrap = app.global_word_wrap;
         }
+        
+        app
     }
 
     pub fn set_status_message(&mut self, message: String, duration: Duration) {
@@ -115,9 +134,15 @@ impl App {
             EditorCommand::Quit => self.handle_quit(),
             EditorCommand::Save => self.save_current_file(),
             EditorCommand::NewTab => {
-                let new_tab = Tab::new(format!("untitled-{}", self.tab_manager.len() + 1));
+                let mut new_tab = Tab::new(format!("untitled-{}", self.tab_manager.len() + 1));
+                new_tab.word_wrap = self.global_word_wrap;
                 self.tab_manager.add_tab(new_tab);
                 self.expand_tree_to_current_file();
+                // Focus the editor after creating new tab
+                self.focus_mode = FocusMode::Editor;
+                if let Some(tree_view) = &mut self.tree_view {
+                    tree_view.is_focused = false;
+                }
             }
             EditorCommand::CloseTab => {
                 self.handle_close_tab();
@@ -132,28 +157,41 @@ impl App {
             }
             EditorCommand::PageUp => {
                 if let Some(tab) = self.tab_manager.active_tab_mut() {
-                    tab.viewport_offset.0 = tab.viewport_offset.0.saturating_sub(10);
+                    // Move by most of the visible area for faster navigation
+                    let page_size = self.terminal_size.1.saturating_sub(4) as usize;
+                    tab.viewport_offset.0 = tab.viewport_offset.0.saturating_sub(page_size);
                 }
             }
             EditorCommand::PageDown => {
                 if let Some(tab) = self.tab_manager.active_tab_mut() {
-                    tab.viewport_offset.0 += 10;
+                    // Move by most of the visible area for faster navigation
+                    let page_size = self.terminal_size.1.saturating_sub(4) as usize;
+                    tab.viewport_offset.0 += page_size;
                 }
             }
             EditorCommand::Modified => {
                 if let Some(tab) = self.tab_manager.active_tab_mut() {
                     tab.mark_modified();
+                    // Ensure cursor is visible after modifications (like paste)
+                    tab.ensure_cursor_visible(self.terminal_size.1.saturating_sub(2) as usize);
                 }
             }
             EditorCommand::ToggleMenu => {
-                let (is_markdown, in_preview_mode, word_wrap_enabled) =
+                let (is_markdown, in_preview_mode) =
                     if let Some(tab) = self.tab_manager.active_tab() {
-                        (tab.is_markdown(), tab.preview_mode, tab.word_wrap)
+                        (tab.is_markdown(), tab.preview_mode)
                     } else {
-                        (false, false, true)
+                        (false, false)
                     };
+                let word_wrap_enabled = self.global_word_wrap;
+                let tree_view_enabled = self.tree_view.is_some();
+                let find_inline_enabled = self
+                    .tab_manager
+                    .active_tab()
+                    .map(|t| t.find_replace_state.active)
+                    .unwrap_or(false);
                 self.menu_system
-                    .toggle_main_menu(is_markdown, in_preview_mode, word_wrap_enabled);
+                    .toggle_main_menu(is_markdown, in_preview_mode, word_wrap_enabled, tree_view_enabled, find_inline_enabled);
             }
             EditorCommand::OpenFile => {
                 // Get the current tab's file path to open picker in that directory
@@ -168,12 +206,18 @@ impl App {
             }
             EditorCommand::Undo => {
                 if let Some(tab) = self.tab_manager.active_tab_mut() {
-                    tab.undo();
+                    if tab.undo() {
+                        // Ensure cursor is visible with actual terminal height
+                        tab.ensure_cursor_visible(self.terminal_size.1.saturating_sub(2) as usize);
+                    }
                 }
             }
             EditorCommand::Redo => {
                 if let Some(tab) = self.tab_manager.active_tab_mut() {
-                    tab.redo();
+                    if tab.redo() {
+                        // Ensure cursor is visible with actual terminal height
+                        tab.ensure_cursor_visible(self.terminal_size.1.saturating_sub(2) as usize);
+                    }
                 }
             }
             EditorCommand::TogglePreview => {
@@ -182,8 +226,12 @@ impl App {
                 }
             }
             EditorCommand::ToggleWordWrap => {
-                if let Some(tab) = self.tab_manager.active_tab_mut() {
-                    tab.toggle_word_wrap();
+                // Toggle global word wrap setting
+                self.global_word_wrap = !self.global_word_wrap;
+                
+                // Apply to all tabs
+                for tab in &mut self.tab_manager.tabs {
+                    tab.word_wrap = self.global_word_wrap;
                 }
             }
             EditorCommand::FocusTreeView => {
@@ -196,6 +244,16 @@ impl App {
                 self.focus_mode = FocusMode::Editor;
                 if let Some(tree_view) = &mut self.tree_view {
                     tree_view.is_focused = false;
+                }
+            }
+            EditorCommand::Find => {
+                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                    tab.start_find();
+                }
+            }
+            EditorCommand::FindReplace => {
+                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                    tab.start_find_replace();
                 }
             }
         }
@@ -249,6 +307,13 @@ impl App {
             return;
         }
 
+        // Handle find/replace bar input
+        if let Some(tab) = self.tab_manager.active_tab() {
+            if tab.find_replace_state.active && self.handle_find_replace_key(key) {
+                return;
+            }
+        }
+
         // Handle input dialog
         if let crate::menu::MenuState::InputDialog(_) = &self.menu_system.state {
             self.handle_input_dialog_key(key);
@@ -299,8 +364,32 @@ impl App {
                                 }
                             }
                             "toggle_word_wrap" => {
+                                // Toggle global word wrap setting
+                                self.global_word_wrap = !self.global_word_wrap;
+                                
+                                // Apply to all tabs
+                                for tab in &mut self.tab_manager.tabs {
+                                    tab.word_wrap = self.global_word_wrap;
+                                }
+                            }
+                            "toggle_tree_view" => {
+                                if self.tree_view.is_some() {
+                                    self.tree_view = None;
+                                } else {
+                                    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                                    self.tree_view = TreeView::new(current_dir, self.sidebar_width).ok();
+                                    if self.tree_view.is_some() {
+                                        self.expand_tree_to_current_file();
+                                    }
+                                }
+                            }
+                            "toggle_find_inline" => {
                                 if let Some(tab) = self.tab_manager.active_tab_mut() {
-                                    tab.toggle_word_wrap();
+                                    if tab.find_replace_state.active {
+                                        tab.stop_find_replace();
+                                    } else {
+                                        tab.start_find_replace();
+                                    }
                                 }
                             }
                             "quit" => {
@@ -396,7 +485,8 @@ impl App {
                                 {
                                     let file_path = context_state.target_path.clone();
                                     if let Ok(content) = std::fs::read_to_string(&file_path) {
-                                        let new_tab = Tab::from_file(file_path, &content);
+                                        let mut new_tab = Tab::from_file(file_path, &content);
+                                        new_tab.word_wrap = self.global_word_wrap;
                                         self.tab_manager.add_tab(new_tab);
                                         self.expand_tree_to_current_file();
                                         self.handle_command(EditorCommand::FocusEditor);
@@ -507,11 +597,6 @@ impl App {
                         self.handle_command(EditorCommand::CurrentTab);
                         return;
                     }
-                    // Tab to switch focus back to editor
-                    (KeyCode::Tab, KeyModifiers::NONE) => {
-                        self.handle_command(EditorCommand::FocusEditor);
-                        return;
-                    }
                     // Escape to exit search mode or focus editor
                     (KeyCode::Esc, KeyModifiers::NONE) => {
                         if tree_view.is_searching {
@@ -542,8 +627,9 @@ impl App {
                             } else {
                                 // Open file
                                 if let Ok(content) = std::fs::read_to_string(&selected_item.path) {
-                                    let new_tab =
+                                    let mut new_tab =
                                         Tab::from_file(selected_item.path.clone(), &content);
+                                    new_tab.word_wrap = self.global_word_wrap;
                                     self.tab_manager.add_tab(new_tab);
                                     self.expand_tree_to_current_file();
                                     self.handle_command(EditorCommand::FocusEditor);
@@ -568,8 +654,8 @@ impl App {
                         }
                         return;
                     }
-                    // File management shortcuts
-                    (KeyCode::Char('n'), KeyModifiers::NONE) => {
+                    // File management shortcuts (disabled during search)
+                    (KeyCode::Char('n'), KeyModifiers::NONE) if !tree_view.is_searching => {
                         // New file
                         if let Some(selected_item) = tree_view.get_selected_item() {
                             let target_path = if selected_item.is_dir {
@@ -590,7 +676,7 @@ impl App {
                         }
                         return;
                     }
-                    (KeyCode::Char('d'), KeyModifiers::NONE) => {
+                    (KeyCode::Char('d'), KeyModifiers::NONE) if !tree_view.is_searching => {
                         // New directory
                         if let Some(selected_item) = tree_view.get_selected_item() {
                             let target_path = if selected_item.is_dir {
@@ -633,7 +719,7 @@ impl App {
                         }
                         return;
                     }
-                    (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                    (KeyCode::Char('r'), KeyModifiers::NONE) if !tree_view.is_searching => {
                         // Rename
                         if let Some(selected_item) = tree_view.get_selected_item() {
                             let filename = selected_item
@@ -688,7 +774,7 @@ impl App {
                         }
                         return;
                     }
-                    (KeyCode::Delete, KeyModifiers::NONE) => {
+                    (KeyCode::Delete, KeyModifiers::NONE) if !tree_view.is_searching => {
                         // Delete with confirmation
                         if let Some(selected_item) = tree_view.get_selected_item() {
                             let filename = selected_item
@@ -710,8 +796,8 @@ impl App {
                         }
                         return;
                     }
-                    // Context menu
-                    (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                    // Context menu (disabled during search)
+                    (KeyCode::Char(' '), KeyModifiers::NONE) if !tree_view.is_searching => {
                         // Space bar opens context menu
                         if let Some(selected_item) = tree_view.get_selected_item() {
                             // Calculate position - roughly center of tree view
@@ -720,10 +806,12 @@ impl App {
                             let menu_x = tree_area_start_x + 10;
                             let menu_y = tree_area_start_y + 5;
 
+                            let has_clipboard = tree_view.has_clipboard();
                             self.menu_system.open_tree_context_menu(
                                 selected_item.path.clone(),
                                 selected_item.is_dir,
                                 (menu_x, menu_y),
+                                has_clipboard,
                             );
                         }
                         return;
@@ -741,24 +829,69 @@ impl App {
             }
         }
 
-        // Tab handling for focus switching when not in tree view
+        // Handle find navigation shortcuts when find is active
+        if let Some(tab) = self.tab_manager.active_tab() {
+            if tab.find_replace_state.active && !tab.find_replace_state.matches.is_empty() {
+                match (key.code, key.modifiers) {
+                    // F3 for next match
+                    (KeyCode::F(3), KeyModifiers::NONE) => {
+                        let (idx, total) = if let Some(tab) = self.tab_manager.active_tab_mut() {
+                            tab.find_next();
+                            (tab.find_replace_state.current_match_index, tab.find_replace_state.matches.len())
+                        } else {
+                            (None, 0)
+                        };
+                        
+                        if let Some(idx) = idx {
+                            self.set_status_message(
+                                format!("Match {} of {}", idx + 1, total),
+                                Duration::from_secs(2),
+                            );
+                        }
+                        return;
+                    }
+                    // Shift+F3 for previous match
+                    (KeyCode::F(3), KeyModifiers::SHIFT) => {
+                        let (idx, total) = if let Some(tab) = self.tab_manager.active_tab_mut() {
+                            tab.find_prev();
+                            (tab.find_replace_state.current_match_index, tab.find_replace_state.matches.len())
+                        } else {
+                            (None, 0)
+                        };
+                        
+                        if let Some(idx) = idx {
+                            self.set_status_message(
+                                format!("Match {} of {}", idx + 1, total),
+                                Duration::from_secs(2),
+                            );
+                        }
+                        return;
+                    }
+                    // Escape to cancel find
+                    (KeyCode::Esc, KeyModifiers::NONE) => {
+                        if let Some(tab) = self.tab_manager.active_tab_mut() {
+                            tab.stop_find_replace();
+                            self.set_status_message("Find cancelled".to_string(), Duration::from_secs(2));
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Tab handling for inserting tabs in editor
         if self.focus_mode == FocusMode::Editor {
             if let (KeyCode::Tab, KeyModifiers::NONE) = (key.code, key.modifiers) {
-                // Only switch to tree view if it exists
-                if self.tree_view.is_some() {
-                    self.handle_command(EditorCommand::FocusTreeView);
-                    return;
-                } else {
-                    // No tree view, insert tab in editor
-                    if let Some(tab) = self.tab_manager.active_tab_mut() {
-                        if tab.cursor.has_selection() {
-                            Self::delete_selection(&mut tab.buffer, &mut tab.cursor);
-                        }
-                        Self::insert_tab(&mut tab.buffer, &mut tab.cursor);
-                        tab.mark_modified();
+                // Insert tab in editor
+                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                    if tab.cursor.has_selection() {
+                        Self::delete_selection(&mut tab.buffer, &mut tab.cursor);
                     }
-                    return;
+                    Self::insert_tab(&mut tab.buffer, &mut tab.cursor);
+                    tab.mark_modified();
                 }
+                return;
             }
         }
 
@@ -926,6 +1059,11 @@ impl App {
             return;
         }
 
+        // Handle find/replace bar mouse events
+        if self.handle_mouse_on_find_replace(mouse) {
+            return;
+        }
+
         self.handle_mouse_on_editor(mouse);
     }
 
@@ -947,6 +1085,7 @@ impl App {
             self.sidebar_width,
             &self.focus_mode,
             &self.status_message,
+            self.dragging_tab,
         );
     }
 
@@ -1138,7 +1277,40 @@ impl App {
         use crossterm::event::MouseEventKind;
 
         if let Some(tab) = self.tab_manager.active_tab_mut() {
-            let scroll_amount = 3;
+            let now = Instant::now();
+            
+            // Check if we're continuing to scroll (within 100ms of last scroll)
+            if let Some(last_time) = self.last_scroll_time {
+                let elapsed = now.duration_since(last_time).as_millis();
+                if elapsed < 100 {
+                    // More aggressive acceleration
+                    // Increase by larger amounts as acceleration grows
+                    let increment = if self.scroll_acceleration < 5 {
+                        2  // Start with +2 for initial acceleration
+                    } else if self.scroll_acceleration < 15 {
+                        3  // Medium acceleration +3
+                    } else if self.scroll_acceleration < 30 {
+                        5  // Fast acceleration +5
+                    } else {
+                        8  // Very fast acceleration +8
+                    };
+                    
+                    self.scroll_acceleration = (self.scroll_acceleration + increment).min(50);
+                } else {
+                    // Reset acceleration if too much time has passed
+                    self.scroll_acceleration = 1;
+                }
+            } else {
+                // First scroll, start with base acceleration
+                self.scroll_acceleration = 1;
+            }
+            
+            // Update last scroll time
+            self.last_scroll_time = Some(now);
+            
+            // Calculate scroll amount based on acceleration
+            // Now can go up to 50 lines per scroll for very long documents
+            let scroll_amount = self.scroll_acceleration;
             let total_lines = tab.buffer.len_lines();
 
             match scroll_kind {
@@ -1220,25 +1392,29 @@ impl App {
                     // Check if click is on Ctrl+N hint
                     if self.is_ctrl_n_hint_clicked(mouse.column) {
                         // Create new tab
-                        let new_tab = crate::tab::Tab::new(format!(
+                        let mut new_tab = crate::tab::Tab::new(format!(
                             "untitled-{}",
                             self.tab_manager.len() + 1
                         ));
+                        new_tab.word_wrap = self.global_word_wrap;
                         self.tab_manager.add_tab(new_tab);
                         return;
                     }
 
                     if let Some(clicked_tab) = self.get_clicked_tab(mouse.column) {
-                        if clicked_tab == active_index {
-                            // Clicked on active tab - show current tab menu
-                            self.menu_system.open_current_tab_menu();
-                            return;
-                        } else {
-                            // Clicked on different tab - switch to it
+                        // Store potential drag information
+                        self.dragging_tab = Some(clicked_tab);
+                        self.drag_start_x = mouse.column;
+                        
+                        // Remember if this tab was already active
+                        self.tab_was_active_on_click = clicked_tab == active_index;
+                        
+                        // Switch to the clicked tab if different
+                        if clicked_tab != active_index {
                             self.tab_manager.set_active_index(clicked_tab);
                             self.expand_tree_to_current_file();
-                            return;
                         }
+                        return;
                     }
                 }
                 let now = Instant::now();
@@ -1307,6 +1483,27 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // Handle tab dragging
+                if let Some(dragging_idx) = self.dragging_tab {
+                    if mouse.row == 0 {
+                        // Close menu when dragging starts
+                        if matches!(self.menu_system.state, crate::menu::MenuState::CurrentTabMenu(_)) {
+                            self.menu_system.close();
+                        }
+                        
+                        // Calculate which tab position we're hovering over
+                        if let Some(hover_tab) = self.get_clicked_tab(mouse.column) {
+                            if hover_tab != dragging_idx {
+                                // Reorder the tabs
+                                self.tab_manager.reorder_tab(dragging_idx, hover_tab);
+                                // Update the dragging index to the new position
+                                self.dragging_tab = Some(hover_tab);
+                            }
+                        }
+                    }
+                    return;
+                }
+                
                 // Check if we're in markdown preview mode - disable selection if so
                 if let Some(tab) = self.tab_manager.active_tab() {
                     if tab.preview_mode && tab.is_markdown() {
@@ -1331,6 +1528,28 @@ impl App {
                 // Note: If not mouse_selecting, we ignore drag (e.g., after double-click word selection)
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                // Check if this was a click on active tab (no drag occurred)
+                if self.dragging_tab.is_some() {
+                    if mouse.row == 0 {
+                        // Check if mouse hasn't moved much (it's a click, not a drag)
+                        if mouse.column.abs_diff(self.drag_start_x) <= 2 {
+                            // Only toggle menu if the tab was already active when we clicked it
+                            if self.tab_was_active_on_click {
+                                // Toggle current tab menu
+                                if matches!(self.menu_system.state, crate::menu::MenuState::CurrentTabMenu(_)) {
+                                    self.menu_system.close();
+                                } else {
+                                    self.menu_system.open_current_tab_menu();
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Stop dragging tab and reset state
+                self.dragging_tab = None;
+                self.tab_was_active_on_click = false;
+                
                 // Check if we're in markdown preview mode - disable selection if so
                 if let Some(tab) = self.tab_manager.active_tab() {
                     if tab.preview_mode && tab.is_markdown() {
@@ -1634,16 +1853,25 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 // Check if click is on F1 menu button in status bar
                 if self.is_f1_button_clicked(mouse.column, mouse.row) {
-                    let (is_markdown, in_preview_mode, word_wrap_enabled) =
+                    let (is_markdown, in_preview_mode) =
                         if let Some(tab) = self.tab_manager.active_tab() {
-                            (tab.is_markdown(), tab.preview_mode, tab.word_wrap)
+                            (tab.is_markdown(), tab.preview_mode)
                         } else {
-                            (false, false, true)
+                            (false, false)
                         };
+                    let word_wrap_enabled = self.global_word_wrap;
+                    let tree_view_enabled = self.tree_view.is_some();
+                    let find_inline_enabled = self
+                        .tab_manager
+                        .active_tab()
+                        .map(|t| t.find_replace_state.active)
+                        .unwrap_or(false);
                     self.menu_system.toggle_main_menu(
                         is_markdown,
                         in_preview_mode,
                         word_wrap_enabled,
+                        tree_view_enabled,
+                        find_inline_enabled,
                     );
                     return true;
                 }
@@ -1689,8 +1917,32 @@ impl App {
                                             }
                                         }
                                         "toggle_word_wrap" => {
+                                            // Toggle global word wrap setting
+                                            self.global_word_wrap = !self.global_word_wrap;
+                                            
+                                            // Apply to all tabs
+                                            for tab in &mut self.tab_manager.tabs {
+                                                tab.word_wrap = self.global_word_wrap;
+                                            }
+                                        }
+                                        "toggle_tree_view" => {
+                                            if self.tree_view.is_some() {
+                                                self.tree_view = None;
+                                            } else {
+                                                let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                                                self.tree_view = TreeView::new(current_dir, self.sidebar_width).ok();
+                                                if self.tree_view.is_some() {
+                                                    self.expand_tree_to_current_file();
+                                                }
+                                            }
+                                        }
+                                        "toggle_find_inline" => {
                                             if let Some(tab) = self.tab_manager.active_tab_mut() {
-                                                tab.toggle_word_wrap();
+                                                if tab.find_replace_state.active {
+                                                    tab.stop_find_replace();
+                                                } else {
+                                                    tab.start_find_replace();
+                                                }
                                             }
                                         }
                                         "quit" => self.handle_quit(),
@@ -1814,7 +2066,8 @@ impl App {
                                             if let Ok(content) =
                                                 std::fs::read_to_string(&target_path)
                                             {
-                                                let new_tab = Tab::from_file(target_path, &content);
+                                                let mut new_tab = Tab::from_file(target_path, &content);
+                                                new_tab.word_wrap = self.global_word_wrap;
                                                 self.tab_manager.add_tab(new_tab);
                                                 self.expand_tree_to_current_file();
                                                 self.handle_command(EditorCommand::FocusEditor);
@@ -1872,18 +2125,61 @@ impl App {
     }
 
     fn get_clicked_tab(&self, mouse_x: u16) -> Option<usize> {
-        let mut current_x = 0u16;
-
-        for (i, tab) in self.tab_manager.tabs().iter().enumerate() {
-            let tab_width = tab.display_name().len() + 2; // " " + name + " "
-
-            if mouse_x >= current_x && mouse_x < current_x + tab_width as u16 {
-                return Some(i);
-            }
-
-            current_x += tab_width as u16;
+        // Use the same calculation as TabBar to get accurate tab positions
+        let available_width = self.terminal_size.0 as usize;
+        let hint_text = "  Ctrl+N";
+        let hint_width = hint_text.len();
+        let tabs_width = available_width.saturating_sub(hint_width);
+        
+        let tabs = self.tab_manager.tabs();
+        let tab_count = tabs.len();
+        
+        if tab_count == 0 {
+            return None;
         }
-
+        
+        // Fixed width per tab
+        const TAB_WIDTH: usize = 14;
+        let max_tabs_that_fit = tabs_width / TAB_WIDTH;
+        
+        if tab_count <= max_tabs_that_fit {
+            // All tabs are visible with fixed width
+            // Simple calculation: which tab based on x position
+            let tab_index = (mouse_x as usize) / TAB_WIDTH;
+            if tab_index < tab_count {
+                return Some(tab_index);
+            }
+        } else {
+            // Too many tabs, showing subset with scrolling
+            let active_index = self.tab_manager.active_index();
+            let half_width = max_tabs_that_fit / 2;
+            
+            let start_index = if active_index >= half_width {
+                (active_index - half_width).min(tab_count.saturating_sub(max_tabs_that_fit))
+            } else {
+                0
+            };
+            let end_index = (start_index + max_tabs_that_fit).min(tab_count);
+            
+            let mut current_x = 0u16;
+            
+            // Account for left truncation indicator
+            if start_index > 0 {
+                if mouse_x < 3 {
+                    return None; // Clicked on « indicator
+                }
+                current_x = 3;
+            }
+            
+            // Check visible tabs
+            for i in start_index..end_index {
+                if mouse_x >= current_x && mouse_x < current_x + TAB_WIDTH as u16 {
+                    return Some(i);
+                }
+                current_x += TAB_WIDTH as u16;
+            }
+        }
+        
         None
     }
 
@@ -1896,21 +2192,53 @@ impl App {
     }
 
     fn is_ctrl_n_hint_clicked(&self, mouse_x: u16) -> bool {
-        // Calculate where the Ctrl+N hint appears
-        let mut hint_start_x = 0u16;
-
-        // Sum up all tab widths
-        for tab in self.tab_manager.tabs().iter() {
-            let tab_width = tab.display_name().len() + 2;
-            hint_start_x += tab_width as u16;
+        // Use the same calculation as TabBar to get accurate position
+        let available_width = self.terminal_size.0 as usize;
+        let hint_text = "  Ctrl+N";
+        let hint_width = hint_text.len();
+        let tabs_width = available_width.saturating_sub(hint_width);
+        
+        let tab_count = self.tab_manager.tabs().len();
+        if tab_count == 0 {
+            // If no tabs, hint starts at x=0
+            return mouse_x < hint_width as u16;
         }
-
-        // Add the spacing: "  " (2 spaces before Ctrl+N)
-        hint_start_x += 2;
-
-        // Ctrl+N is 6 characters
-        let hint_end_x = hint_start_x + 6;
-
+        
+        // Fixed width per tab
+        const TAB_WIDTH: usize = 14;
+        let max_tabs_that_fit = tabs_width / TAB_WIDTH;
+        
+        // Calculate where all tabs end
+        let tabs_total_width = if tab_count <= max_tabs_that_fit {
+            // All tabs visible with fixed width
+            tab_count * TAB_WIDTH
+        } else {
+            // Showing subset with indicators
+            let active_index = self.tab_manager.active_index();
+            let half_width = max_tabs_that_fit / 2;
+            
+            let start_index = if active_index >= half_width {
+                (active_index - half_width).min(tab_count.saturating_sub(max_tabs_that_fit))
+            } else {
+                0
+            };
+            let end_index = (start_index + max_tabs_that_fit).min(tab_count);
+            
+            let mut width = 0;
+            if start_index > 0 {
+                width += 3; // " « "
+            }
+            width += (end_index - start_index) * TAB_WIDTH;
+            if end_index < tab_count {
+                width += 3; // " » "
+            }
+            width
+        };
+        
+        // The hint starts right after the tabs
+        let hint_start_x = tabs_total_width as u16;
+        let hint_end_x = hint_start_x + hint_width as u16;
+        
         mouse_x >= hint_start_x && mouse_x < hint_end_x
     }
 
@@ -1923,18 +2251,14 @@ impl App {
                 if let crate::menu::MenuState::FilePicker(picker_state) =
                     &mut self.menu_system.state
                 {
-                    let scroll_amount = 3;
+                    // Use base amount of 1 for incremental scrolling
+                    let base_scroll_amount = 1;
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
-                            picker_state.selected_index =
-                                picker_state.selected_index.saturating_sub(scroll_amount);
-                            picker_state.hovered_index = None; // Clear hover when scrolling
+                            picker_state.scroll_up(base_scroll_amount);
                         }
                         MouseEventKind::ScrollDown => {
-                            let max_index = picker_state.filtered_items.len().saturating_sub(1);
-                            picker_state.selected_index =
-                                (picker_state.selected_index + scroll_amount).min(max_index);
-                            picker_state.hovered_index = None; // Clear hover when scrolling
+                            picker_state.scroll_down(base_scroll_amount);
                         }
                         _ => {}
                     }
@@ -1947,8 +2271,8 @@ impl App {
                     &mut self.menu_system.state
                 {
                     // Calculate file picker modal area (same as in UI draw method)
-                    let modal_width = 70u16.min(self.terminal_size.0.saturating_sub(4));
-                    let modal_height = 24u16.min(self.terminal_size.1.saturating_sub(4));
+                    let modal_width = 80u16.min(self.terminal_size.0.saturating_sub(4));
+                    let modal_height = 28u16.min(self.terminal_size.1.saturating_sub(4));
                     let modal_x = (self.terminal_size.0.saturating_sub(modal_width)) / 2;
                     let modal_y = (self.terminal_size.1.saturating_sub(modal_height)) / 2;
 
@@ -1958,11 +2282,11 @@ impl App {
                         && mouse.row >= modal_y
                         && mouse.row < modal_y + modal_height
                     {
-                        // Calculate file list area (accounting for margin and search input)
-                        let list_start_y = modal_y + 1 + 1 + 1 + 1; // border + margin + current dir + search + separator
+                        // Calculate file list area (accounting for new layout: margin + search)
+                        let list_start_y = modal_y + 1 + 1; // margin + search
                         let is_searching = !picker_state.search_query.is_empty();
                         let items_per_entry = if is_searching { 2 } else { 1 };
-                        let list_height = modal_height.saturating_sub(5); // subtract borders and other elements
+                        let list_height = modal_height.saturating_sub(2); // subtract margin and search
 
                         // Check if click is on scrollbar (rightmost column of file list area)
                         let total_items = picker_state.filtered_items.len();
@@ -2033,8 +2357,8 @@ impl App {
                     &self.menu_system.state
                 {
                     // Calculate file picker modal area (same as in UI draw method)
-                    let modal_width = 70u16.min(self.terminal_size.0.saturating_sub(4));
-                    let modal_height = 24u16.min(self.terminal_size.1.saturating_sub(4));
+                    let modal_width = 80u16.min(self.terminal_size.0.saturating_sub(4));
+                    let modal_height = 28u16.min(self.terminal_size.1.saturating_sub(4));
                     let modal_x = (self.terminal_size.0.saturating_sub(modal_width)) / 2;
                     let modal_y = (self.terminal_size.1.saturating_sub(modal_height)) / 2;
 
@@ -2044,11 +2368,11 @@ impl App {
                         && mouse.row >= modal_y
                         && mouse.row < modal_y + modal_height
                     {
-                        // Calculate file list area (accounting for margin and search input)
-                        let list_start_y = modal_y + 1 + 1 + 1 + 1; // border + margin + current dir + search + separator
+                        // Calculate file list area (accounting for new layout: margin + search)
+                        let list_start_y = modal_y + 1 + 1; // margin + search
                         let is_searching = !picker_state.search_query.is_empty();
                         let items_per_entry = if is_searching { 2 } else { 1 };
-                        let list_height = modal_height.saturating_sub(5); // subtract borders and other elements
+                        let list_height = modal_height.saturating_sub(2); // subtract margin and search
 
                         // Check if click is on scrollbar (rightmost column of file list area)
                         let total_items = picker_state.filtered_items.len();
@@ -2166,10 +2490,11 @@ impl App {
                                     match String::from_utf8(bytes) {
                                         Ok(text) => {
                                             // Valid text file - open it using from_file to set preview mode for markdown
-                                            let new_tab = crate::tab::Tab::from_file(
+                                            let mut new_tab = crate::tab::Tab::from_file(
                                                 selected_item.path.clone(),
                                                 &text,
                                             );
+                                            new_tab.word_wrap = self.global_word_wrap;
                                             self.tab_manager.add_tab(new_tab);
                                             self.menu_system.close();
                                         }
@@ -2239,10 +2564,11 @@ impl App {
                                     match String::from_utf8(bytes) {
                                         Ok(text) => {
                                             // Valid text file - open it using from_file to set preview mode for markdown
-                                            let new_tab = crate::tab::Tab::from_file(
+                                            let mut new_tab = crate::tab::Tab::from_file(
                                                 selected_item.path.clone(),
                                                 &text,
                                             );
+                                            new_tab.word_wrap = self.global_word_wrap;
                                             self.tab_manager.add_tab(new_tab);
                                             self.menu_system.close();
                                         }
@@ -2295,6 +2621,51 @@ impl App {
                         picker_state.search_query.pop();
                         picker_state.update_filter();
                     }
+                }
+                // Ctrl/Alt+Backspace - delete word
+                (KeyCode::Backspace, KeyModifiers::CONTROL) | (KeyCode::Backspace, KeyModifiers::ALT) => {
+                    if !picker_state.search_query.is_empty() {
+                        // Delete word backwards
+                        let mut chars: Vec<char> = picker_state.search_query.chars().collect();
+                        
+                        // Skip trailing whitespace
+                        while !chars.is_empty() && chars.last().unwrap().is_whitespace() {
+                            chars.pop();
+                        }
+                        
+                        // Delete word characters
+                        while !chars.is_empty() && !chars.last().unwrap().is_whitespace() {
+                            chars.pop();
+                        }
+                        
+                        picker_state.search_query = chars.into_iter().collect();
+                        picker_state.update_filter();
+                    }
+                }
+                // Ctrl+Left/Alt+Left - move cursor to previous word (for future cursor support)
+                (KeyCode::Left, KeyModifiers::CONTROL) | (KeyCode::Left, KeyModifiers::ALT) => {
+                    // For now, just treat as regular left (go up directory)
+                    picker_state.go_up();
+                }
+                // Ctrl+Right/Alt+Right - move cursor to next word (for future cursor support)
+                (KeyCode::Right, KeyModifiers::CONTROL) | (KeyCode::Right, KeyModifiers::ALT) => {
+                    // For now, just treat as enter (select item)
+                    if let Some(selected_item) = picker_state.get_selected_item() {
+                        if selected_item.is_dir {
+                            picker_state.enter_directory(selected_item.path.clone());
+                        }
+                    }
+                }
+                // Ctrl+A - select all text (clear search for retyping)
+                (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                    // Clear search to allow retyping
+                    picker_state.search_query.clear();
+                    picker_state.update_filter();
+                }
+                // Ctrl+U - clear line (Unix style)
+                (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                    picker_state.search_query.clear();
+                    picker_state.update_filter();
                 }
                 (KeyCode::Char(c), KeyModifiers::NONE) => {
                     // Add character to search
@@ -2518,6 +2889,374 @@ impl App {
         // Set selection
         input_state.selection_start = Some(start);
         input_state.cursor_position = end;
+    }
+
+    fn handle_find_replace_key(&mut self, key: KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::tab::FindFocusedField;
+
+        let tab = match self.tab_manager.active_tab_mut() {
+            Some(tab) => tab,
+            None => return false,
+        };
+
+        if !tab.find_replace_state.active {
+            return false;
+        }
+
+        match (key.code, key.modifiers) {
+            // ESC to close find/replace
+            (KeyCode::Esc, KeyModifiers::NONE) => {
+                tab.stop_find_replace();
+                return true;
+            }
+
+            // Tab to switch between find and replace fields
+            (KeyCode::Tab, KeyModifiers::NONE) if tab.find_replace_state.is_replace_mode => {
+                tab.find_replace_state.focused_field = match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => FindFocusedField::Replace,
+                    FindFocusedField::Replace => FindFocusedField::Find,
+                };
+                return true;
+            }
+
+            // Enter or F3 for next match
+            (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::F(3), KeyModifiers::NONE) => {
+                if !tab.find_replace_state.matches.is_empty() {
+                    tab.find_next();
+                    let (idx, total) = (tab.find_replace_state.current_match_index, tab.find_replace_state.matches.len());
+                    if let Some(idx) = idx {
+                        self.set_status_message(
+                            format!("Match {} of {}", idx + 1, total),
+                            Duration::from_secs(2),
+                        );
+                    }
+                }
+                return true;
+            }
+
+            // Shift+F3 or Shift+Enter for previous match
+            (KeyCode::F(3), KeyModifiers::SHIFT) | (KeyCode::Enter, KeyModifiers::SHIFT) => {
+                if !tab.find_replace_state.matches.is_empty() {
+                    tab.find_prev();
+                    let (idx, total) = (tab.find_replace_state.current_match_index, tab.find_replace_state.matches.len());
+                    if let Some(idx) = idx {
+                        self.set_status_message(
+                            format!("Match {} of {}", idx + 1, total),
+                            Duration::from_secs(2),
+                        );
+                    }
+                }
+                return true;
+            }
+
+            // Alt+C to toggle case sensitive
+            (KeyCode::Char('c'), KeyModifiers::ALT) | (KeyCode::Char('C'), KeyModifiers::ALT) => {
+                tab.find_replace_state.case_sensitive = !tab.find_replace_state.case_sensitive;
+                tab.perform_find();
+                return true;
+            }
+
+            // Alt+W to toggle whole word
+            (KeyCode::Char('w'), KeyModifiers::ALT) | (KeyCode::Char('W'), KeyModifiers::ALT) => {
+                tab.find_replace_state.whole_word = !tab.find_replace_state.whole_word;
+                tab.perform_find();
+                return true;
+            }
+
+            // Ctrl+H to toggle replace mode
+            (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
+                tab.find_replace_state.is_replace_mode = !tab.find_replace_state.is_replace_mode;
+                // If toggling off replace mode, switch focus back to find field
+                if !tab.find_replace_state.is_replace_mode && tab.find_replace_state.focused_field == FindFocusedField::Replace {
+                    tab.find_replace_state.focused_field = FindFocusedField::Find;
+                }
+                return true;
+            }
+
+            // Ctrl+R to replace current
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) if tab.find_replace_state.is_replace_mode => {
+                tab.replace_current();
+                let remaining = tab.find_replace_state.matches.len();
+                if remaining > 0 {
+                    self.set_status_message(
+                        format!("Replaced. {} matches remaining", remaining),
+                        Duration::from_secs(2),
+                    );
+                } else {
+                    self.set_status_message(
+                        "All matches replaced".to_string(),
+                        Duration::from_secs(2),
+                    );
+                }
+                return true;
+            }
+
+            // Ctrl+Shift+R to replace all
+            (KeyCode::Char('R'), KeyModifiers::CONTROL | KeyModifiers::SHIFT) if tab.find_replace_state.is_replace_mode => {
+                let count = tab.find_replace_state.matches.len();
+                tab.replace_all();
+                self.set_status_message(
+                    format!("Replaced {} occurrences", count),
+                    Duration::from_secs(2),
+                );
+                return true;
+            }
+
+            // Character input
+            (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        tab.find_replace_state.find_query.insert(tab.find_replace_state.find_cursor_position, c);
+                        tab.find_replace_state.find_cursor_position += 1;
+                        tab.perform_find();
+                    }
+                    FindFocusedField::Replace => {
+                        tab.find_replace_state.replace_query.insert(tab.find_replace_state.replace_cursor_position, c);
+                        tab.find_replace_state.replace_cursor_position += 1;
+                    }
+                }
+                return true;
+            }
+
+            // Backspace
+            (KeyCode::Backspace, KeyModifiers::NONE) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        if tab.find_replace_state.find_cursor_position > 0 {
+                            tab.find_replace_state.find_cursor_position -= 1;
+                            tab.find_replace_state.find_query.remove(tab.find_replace_state.find_cursor_position);
+                            tab.perform_find();
+                        }
+                    }
+                    FindFocusedField::Replace => {
+                        if tab.find_replace_state.replace_cursor_position > 0 {
+                            tab.find_replace_state.replace_cursor_position -= 1;
+                            tab.find_replace_state.replace_query.remove(tab.find_replace_state.replace_cursor_position);
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // Ctrl+Backspace or Alt+Backspace - delete word
+            (KeyCode::Backspace, KeyModifiers::CONTROL) | (KeyCode::Backspace, KeyModifiers::ALT) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        if tab.find_replace_state.find_cursor_position > 0 {
+                            let chars: Vec<char> = tab.find_replace_state.find_query.chars().collect();
+                            let mut new_pos = tab.find_replace_state.find_cursor_position;
+                            
+                            // Skip spaces backwards
+                            while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
+                                new_pos -= 1;
+                            }
+                            // Skip word characters backwards
+                            while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
+                                new_pos -= 1;
+                            }
+                            
+                            // Remove characters from new_pos to cursor_position
+                            let remove_count = tab.find_replace_state.find_cursor_position - new_pos;
+                            for _ in 0..remove_count {
+                                tab.find_replace_state.find_query.remove(new_pos);
+                            }
+                            tab.find_replace_state.find_cursor_position = new_pos;
+                            tab.perform_find();
+                        }
+                    }
+                    FindFocusedField::Replace => {
+                        if tab.find_replace_state.replace_cursor_position > 0 {
+                            let chars: Vec<char> = tab.find_replace_state.replace_query.chars().collect();
+                            let mut new_pos = tab.find_replace_state.replace_cursor_position;
+                            
+                            // Skip spaces backwards
+                            while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
+                                new_pos -= 1;
+                            }
+                            // Skip word characters backwards
+                            while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
+                                new_pos -= 1;
+                            }
+                            
+                            // Remove characters from new_pos to cursor_position
+                            let remove_count = tab.find_replace_state.replace_cursor_position - new_pos;
+                            for _ in 0..remove_count {
+                                tab.find_replace_state.replace_query.remove(new_pos);
+                            }
+                            tab.find_replace_state.replace_cursor_position = new_pos;
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // Delete
+            (KeyCode::Delete, KeyModifiers::NONE) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        if tab.find_replace_state.find_cursor_position < tab.find_replace_state.find_query.len() {
+                            tab.find_replace_state.find_query.remove(tab.find_replace_state.find_cursor_position);
+                            tab.perform_find();
+                        }
+                    }
+                    FindFocusedField::Replace => {
+                        if tab.find_replace_state.replace_cursor_position < tab.find_replace_state.replace_query.len() {
+                            tab.find_replace_state.replace_query.remove(tab.find_replace_state.replace_cursor_position);
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // Left arrow
+            (KeyCode::Left, KeyModifiers::NONE) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        if tab.find_replace_state.find_cursor_position > 0 {
+                            tab.find_replace_state.find_cursor_position -= 1;
+                        }
+                    }
+                    FindFocusedField::Replace => {
+                        if tab.find_replace_state.replace_cursor_position > 0 {
+                            tab.find_replace_state.replace_cursor_position -= 1;
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // Ctrl+Left or Alt+Left - move word left
+            (KeyCode::Left, KeyModifiers::CONTROL) | (KeyCode::Left, KeyModifiers::ALT) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        if tab.find_replace_state.find_cursor_position > 0 {
+                            let chars: Vec<char> = tab.find_replace_state.find_query.chars().collect();
+                            let mut new_pos = tab.find_replace_state.find_cursor_position;
+                            
+                            // Skip spaces backwards
+                            while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
+                                new_pos -= 1;
+                            }
+                            // Skip word characters backwards
+                            while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
+                                new_pos -= 1;
+                            }
+                            
+                            tab.find_replace_state.find_cursor_position = new_pos;
+                        }
+                    }
+                    FindFocusedField::Replace => {
+                        if tab.find_replace_state.replace_cursor_position > 0 {
+                            let chars: Vec<char> = tab.find_replace_state.replace_query.chars().collect();
+                            let mut new_pos = tab.find_replace_state.replace_cursor_position;
+                            
+                            // Skip spaces backwards
+                            while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
+                                new_pos -= 1;
+                            }
+                            // Skip word characters backwards
+                            while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
+                                new_pos -= 1;
+                            }
+                            
+                            tab.find_replace_state.replace_cursor_position = new_pos;
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // Right arrow
+            (KeyCode::Right, KeyModifiers::NONE) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        if tab.find_replace_state.find_cursor_position < tab.find_replace_state.find_query.len() {
+                            tab.find_replace_state.find_cursor_position += 1;
+                        }
+                    }
+                    FindFocusedField::Replace => {
+                        if tab.find_replace_state.replace_cursor_position < tab.find_replace_state.replace_query.len() {
+                            tab.find_replace_state.replace_cursor_position += 1;
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // Ctrl+Right or Alt+Right - move word right
+            (KeyCode::Right, KeyModifiers::CONTROL) | (KeyCode::Right, KeyModifiers::ALT) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        let len = tab.find_replace_state.find_query.len();
+                        if tab.find_replace_state.find_cursor_position < len {
+                            let chars: Vec<char> = tab.find_replace_state.find_query.chars().collect();
+                            let mut new_pos = tab.find_replace_state.find_cursor_position;
+                            
+                            // Skip word characters forward
+                            while new_pos < len && !chars[new_pos].is_whitespace() {
+                                new_pos += 1;
+                            }
+                            // Skip spaces forward
+                            while new_pos < len && chars[new_pos].is_whitespace() {
+                                new_pos += 1;
+                            }
+                            
+                            tab.find_replace_state.find_cursor_position = new_pos;
+                        }
+                    }
+                    FindFocusedField::Replace => {
+                        let len = tab.find_replace_state.replace_query.len();
+                        if tab.find_replace_state.replace_cursor_position < len {
+                            let chars: Vec<char> = tab.find_replace_state.replace_query.chars().collect();
+                            let mut new_pos = tab.find_replace_state.replace_cursor_position;
+                            
+                            // Skip word characters forward
+                            while new_pos < len && !chars[new_pos].is_whitespace() {
+                                new_pos += 1;
+                            }
+                            // Skip spaces forward
+                            while new_pos < len && chars[new_pos].is_whitespace() {
+                                new_pos += 1;
+                            }
+                            
+                            tab.find_replace_state.replace_cursor_position = new_pos;
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // Home
+            (KeyCode::Home, KeyModifiers::NONE) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        tab.find_replace_state.find_cursor_position = 0;
+                    }
+                    FindFocusedField::Replace => {
+                        tab.find_replace_state.replace_cursor_position = 0;
+                    }
+                }
+                return true;
+            }
+
+            // End
+            (KeyCode::End, KeyModifiers::NONE) => {
+                match tab.find_replace_state.focused_field {
+                    FindFocusedField::Find => {
+                        tab.find_replace_state.find_cursor_position = tab.find_replace_state.find_query.len();
+                    }
+                    FindFocusedField::Replace => {
+                        tab.find_replace_state.replace_cursor_position = tab.find_replace_state.replace_query.len();
+                    }
+                }
+                return true;
+            }
+
+            _ => {}
+        }
+
+        false
     }
 
     fn handle_input_dialog_key(&mut self, key: KeyEvent) {
@@ -2885,6 +3624,7 @@ impl App {
         }
     }
 
+
     fn execute_file_operation(&mut self, operation: &str, target_path: &PathBuf, input: &str) {
         match operation {
             "save_file" => {
@@ -2971,13 +3711,13 @@ impl App {
 
     fn handle_file_picker_scrollbar_click(&mut self, mouse: MouseEvent) {
         if let crate::menu::MenuState::FilePicker(picker_state) = &mut self.menu_system.state {
-            let _modal_width = 70u16.min(self.terminal_size.0.saturating_sub(4));
-            let modal_height = 24u16.min(self.terminal_size.1.saturating_sub(4));
+            let _modal_width = 80u16.min(self.terminal_size.0.saturating_sub(4));
+            let modal_height = 28u16.min(self.terminal_size.1.saturating_sub(4));
             let modal_y = (self.terminal_size.1.saturating_sub(modal_height)) / 2;
-            let list_start_y = modal_y + 1 + 1 + 1 + 1; // border + margin + current dir + search + separator
+            let list_start_y = modal_y + 1 + 1; // margin + search
             let is_searching = !picker_state.search_query.is_empty();
             let items_per_entry = if is_searching { 2 } else { 1 };
-            let list_height = modal_height.saturating_sub(5); // subtract borders and other elements
+            let list_height = modal_height.saturating_sub(2); // subtract margin and search
 
             let click_y = (mouse.row - list_start_y) as usize;
             let visible_items = (list_height as usize) / items_per_entry;
@@ -3115,14 +3855,15 @@ impl App {
                 // ALWAYS handle scroll events in tree view area, regardless of tree_view state
                 if let Some(tree_view) = &mut self.tree_view {
                     // Handle scrolling by adjusting scroll offset directly
-                    let scroll_amount = 3;
+                    // Use base amount of 1 for incremental scrolling
+                    let base_scroll_amount = 1;
                     let visible_height = (tree_area_end_y - tree_area_start_y) as usize;
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
-                            tree_view.scroll_up(scroll_amount);
+                            tree_view.scroll_up(base_scroll_amount);
                         }
                         MouseEventKind::ScrollDown => {
-                            tree_view.scroll_down(scroll_amount, visible_height);
+                            tree_view.scroll_down(base_scroll_amount, visible_height);
                         }
                         _ => {}
                     }
@@ -3168,7 +3909,8 @@ impl App {
                                     let file_path = selected_item.path.clone();
                                     let _ = tree_view; // Release borrow
                                     if let Ok(content) = std::fs::read_to_string(&file_path) {
-                                        let new_tab = Tab::from_file(file_path, &content);
+                                        let mut new_tab = Tab::from_file(file_path, &content);
+                                        new_tab.word_wrap = self.global_word_wrap;
                                         self.tab_manager.add_tab(new_tab);
                                         self.expand_tree_to_current_file();
                                         self.handle_command(EditorCommand::FocusEditor);
@@ -3179,6 +3921,15 @@ impl App {
                         } else {
                             self.last_click_time = Some(now);
                         }
+                    } else {
+                        // Clicked on empty area - open context menu for new file/folder
+                        let root_path = tree_view.root.path.clone();
+                        let has_clipboard = tree_view.has_clipboard();
+                        self.menu_system.open_tree_empty_area_menu(
+                            root_path,
+                            (mouse.column, mouse.row),
+                            has_clipboard,
+                        );
                     }
                 }
 
@@ -3200,12 +3951,23 @@ impl App {
 
                         if let Some(selected_item) = tree_view.get_selected_item() {
                             // Open context menu at mouse position
+                            let has_clipboard = tree_view.has_clipboard();
                             self.menu_system.open_tree_context_menu(
                                 selected_item.path.clone(),
                                 selected_item.is_dir,
                                 (mouse.column, mouse.row),
+                                has_clipboard,
                             );
                         }
+                    } else {
+                        // Right-clicked on empty area - open context menu for new file/folder
+                        let root_path = tree_view.root.path.clone();
+                        let has_clipboard = tree_view.has_clipboard();
+                        self.menu_system.open_tree_empty_area_menu(
+                            root_path,
+                            (mouse.column, mouse.row),
+                            has_clipboard,
+                        );
                     }
                 }
 
@@ -3233,5 +3995,156 @@ impl App {
         }
 
         true // Mouse was in tree view area
+    }
+
+    fn handle_mouse_on_find_replace(&mut self, mouse: MouseEvent) -> bool {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::tab::FindFocusedField;
+
+        // Check if find/replace is active
+        let tab_has_find_active = if let Some(tab) = self.tab_manager.active_tab() {
+            tab.find_replace_state.active
+        } else {
+            return false;
+        };
+
+        if !tab_has_find_active {
+            return false;
+        }
+
+        // Calculate find/replace bar position
+        // It appears at the top of the editor area (after tab bar and potentially after tree view top)
+        let bar_start_y = 1; // After tab bar
+        let bar_height = if let Some(tab) = self.tab_manager.active_tab() {
+            if tab.find_replace_state.is_replace_mode { 2 } else { 1 }
+        } else {
+            return false;
+        };
+
+        // Check if mouse is within find/replace bar area
+        if mouse.row < bar_start_y || mouse.row >= bar_start_y + bar_height {
+            return false;
+        }
+
+        // Calculate horizontal position considering tree view
+        let editor_start_x = if self.tree_view.is_some() {
+            self.sidebar_width
+        } else {
+            0
+        };
+
+        // Check if mouse is in the editor area (not in tree view)
+        if mouse.column < editor_start_x {
+            return false;
+        }
+
+        // Adjust mouse column relative to editor area
+        let relative_column = (mouse.column - editor_start_x) as usize;
+
+        // Calculate layout positions based on the UI layout
+        // These values must match the layout in ui/mod.rs
+        // Total fixed widths: 10 (label) + 12 (counter) + 12 (find next) + 5 (case) + 5 (word) + 2 (padding) = 46
+        let available_width = (self.terminal_size.0 - editor_start_x) as usize;
+        let fixed_widths = 46;
+        let input_width = available_width.saturating_sub(fixed_widths);
+        
+        let find_label_width = 10;
+        let find_input_start = find_label_width;
+        let find_input_end = find_input_start + input_width;
+        let match_counter_start = find_input_end;
+        let match_counter_width = 12;
+        let find_next_start = match_counter_start + match_counter_width;
+        let find_next_width = 12;
+        let case_btn_start = find_next_start + find_next_width;
+        let case_btn_width = 5;
+        let word_btn_start = case_btn_start + case_btn_width;
+        let word_btn_width = 5;
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if mouse.row == bar_start_y {
+                    // Find row
+                    // Debug: Log click position and button boundaries
+                    eprintln!("Click at column {}, Find Next: {}-{}, Case: {}-{}, Word: {}-{}", 
+                        relative_column, find_next_start, find_next_start + find_next_width,
+                        case_btn_start, case_btn_start + case_btn_width,
+                        word_btn_start, word_btn_start + word_btn_width);
+                    
+                    if relative_column >= find_input_start && relative_column < find_input_end {
+                        // Click on find input field
+                        if let Some(tab) = self.tab_manager.active_tab_mut() {
+                            tab.find_replace_state.focused_field = FindFocusedField::Find;
+                            // Set cursor position based on click
+                            let text_pos = relative_column - find_input_start;
+                            if text_pos <= tab.find_replace_state.find_query.len() {
+                                tab.find_replace_state.find_cursor_position = text_pos;
+                            }
+                        }
+                        return true;
+                    } else if relative_column >= find_next_start && relative_column < find_next_start + find_next_width {
+                        // Click on Find Next button
+                        if let Some(tab) = self.tab_manager.active_tab_mut() {
+                            tab.find_next();
+                        }
+                        return true;
+                    } else if relative_column >= case_btn_start && relative_column < case_btn_start + case_btn_width {
+                        // Toggle case sensitive
+                        if let Some(tab) = self.tab_manager.active_tab_mut() {
+                            tab.find_replace_state.case_sensitive = !tab.find_replace_state.case_sensitive;
+                            tab.perform_find();
+                        }
+                        return true;
+                    } else if relative_column >= word_btn_start && relative_column < word_btn_start + word_btn_width {
+                        // Toggle whole word
+                        if let Some(tab) = self.tab_manager.active_tab_mut() {
+                            tab.find_replace_state.whole_word = !tab.find_replace_state.whole_word;
+                            tab.perform_find();
+                        }
+                        return true;
+                    }
+                } else if mouse.row == bar_start_y + 1 {
+                    // Replace row (if visible)
+                    if let Some(tab) = self.tab_manager.active_tab() {
+                        if tab.find_replace_state.is_replace_mode {
+                            // Similar layout for replace row
+                            let replace_input_start = find_label_width;  // Same as find input
+                            let replace_input_end = find_input_end;
+                            let replace_btn_start = match_counter_start + match_counter_width;
+                            let replace_btn_width = 12;
+                            let replace_all_start = replace_btn_start + replace_btn_width;
+                            let replace_all_width = 10;  // Spans positions 4 and 5 (5+5)
+
+                            if relative_column >= replace_input_start && relative_column < replace_input_end {
+                                // Click on replace input field
+                                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                    tab.find_replace_state.focused_field = FindFocusedField::Replace;
+                                    // Set cursor position based on click
+                                    let text_pos = relative_column - replace_input_start;
+                                    if text_pos <= tab.find_replace_state.replace_query.len() {
+                                        tab.find_replace_state.replace_cursor_position = text_pos;
+                                    }
+                                }
+                                return true;
+                            } else if relative_column >= replace_btn_start && relative_column < replace_btn_start + replace_btn_width {
+                                // Click on Replace button
+                                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                    tab.replace_current();
+                                }
+                                return true;
+                            } else if relative_column >= replace_all_start && relative_column < replace_all_start + replace_all_width {
+                                // Click on Replace All button
+                                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                    tab.replace_all();
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        false
     }
 }

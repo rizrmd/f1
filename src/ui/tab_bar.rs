@@ -25,86 +25,55 @@ impl TabBar {
         let hint_width = hint_text.len();
         let tabs_width = available_width.saturating_sub(hint_width);
 
-        // Calculate the same way as in draw() to get consistent positioning
-        let tab_widths = self.calculate_tab_widths(tab_manager, tabs_width);
-
-        let mut x_pos = 0u16;
-        for (i, &width) in tab_widths.iter().enumerate() {
-            if i == target_tab_index {
-                return x_pos;
-            }
-            x_pos += width as u16;
-        }
-
-        x_pos
-    }
-
-    fn calculate_tab_widths(&self, tab_manager: &TabManager, available_width: usize) -> Vec<usize> {
-        let mut widths = Vec::new();
         let tabs = tab_manager.tabs();
         let tab_count = tabs.len();
-
+        
         if tab_count == 0 {
-            return widths;
+            return 0;
         }
 
-        // Minimum width per tab (including padding)
-        let min_tab_width = 8;
-        let max_tabs_that_fit = available_width / min_tab_width;
-
+        // Fixed width per tab
+        const TAB_WIDTH: usize = 14;
+        let max_tabs_that_fit = tabs_width / TAB_WIDTH;
+        
         if tab_count <= max_tabs_that_fit {
-            // All tabs can fit, calculate actual widths
-            let avg_width = available_width / tab_count;
-            let max_name_width = avg_width.saturating_sub(2);
-
-            for tab in tabs.iter() {
-                let full_name = tab.display_name();
-                let truncated_name = self.truncate_name(&full_name, max_name_width);
-                let tab_width = truncated_name.len() + 2; // Add padding spaces
-                widths.push(tab_width);
-            }
+            // All tabs are visible with fixed width
+            // Simple calculation: tab_index * TAB_WIDTH
+            (target_tab_index * TAB_WIDTH) as u16
         } else {
-            // Too many tabs, show subset
+            // Too many tabs, showing subset with scrolling
             let active_index = tab_manager.active_index();
             let half_width = max_tabs_that_fit / 2;
-
+            
             let start_index = if active_index >= half_width {
                 (active_index - half_width).min(tab_count.saturating_sub(max_tabs_that_fit))
             } else {
                 0
             };
             let end_index = (start_index + max_tabs_that_fit).min(tab_count);
-
-            // Add width for left truncation indicator
+            
+            // Check if target tab is visible
+            if target_tab_index < start_index || target_tab_index >= end_index {
+                return 0; // Tab is not visible
+            }
+            
+            // Calculate position
+            let mut x_pos = 0u16;
+            
+            // Account for left truncation indicator
             if start_index > 0 {
-                widths.push(3); // " « "
+                x_pos = 3; // Width of " « "
             }
-
-            let visible_tab_count = end_index - start_index;
-            let remaining_width = available_width
-                .saturating_sub(if start_index > 0 { 3 } else { 0 })
-                .saturating_sub(if end_index < tab_count { 3 } else { 0 });
-            let avg_width = remaining_width / visible_tab_count;
-            let max_name_width = avg_width.saturating_sub(2);
-
-            for i in start_index..end_index {
-                let tab = &tabs[i];
-                let full_name = tab.display_name();
-                let truncated_name = self.truncate_name(&full_name, max_name_width);
-                let tab_width = truncated_name.len() + 2;
-                widths.push(tab_width);
-            }
-
-            // Add width for right truncation indicator
-            if end_index < tab_count {
-                widths.push(3); // " » "
-            }
+            
+            // Add offset for the target tab
+            let tab_offset = target_tab_index - start_index;
+            x_pos += (tab_offset * TAB_WIDTH) as u16;
+            
+            x_pos
         }
-
-        widths
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, tab_manager: &TabManager) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, tab_manager: &TabManager, dragging_tab: Option<usize>) {
         let available_width = area.width as usize;
         let hint_text = "  Ctrl+N";
         let hint_width = hint_text.len();
@@ -114,7 +83,7 @@ impl TabBar {
         let mut spans = Vec::new();
 
         // Calculate how to display tabs with truncation
-        let tab_spans = self.calculate_tab_spans(tab_manager, tabs_width);
+        let tab_spans = self.calculate_tab_spans(tab_manager, tabs_width, dragging_tab);
         spans.extend(tab_spans);
 
         // Add the Ctrl+N hint directly after the tabs
@@ -134,6 +103,7 @@ impl TabBar {
         &self,
         tab_manager: &TabManager,
         available_width: usize,
+        dragging_tab: Option<usize>,
     ) -> Vec<Span<'_>> {
         let mut spans = Vec::new();
         let tabs = tab_manager.tabs();
@@ -143,21 +113,27 @@ impl TabBar {
             return spans;
         }
 
-        // Minimum width per tab (including padding)
-        let min_tab_width = 8; // At least "...txt*" or similar
-        let max_tabs_that_fit = available_width / min_tab_width;
+        // Fixed width per tab
+        const TAB_WIDTH: usize = 14;
+        const TAB_CONTENT_WIDTH: usize = TAB_WIDTH - 2; // Minus padding
+        let max_tabs_that_fit = available_width / TAB_WIDTH;
 
         if tab_count <= max_tabs_that_fit {
-            // All tabs can fit, but may need truncation
-            let avg_width = available_width / tab_count;
-            let max_name_width = avg_width.saturating_sub(2); // Account for padding spaces
-
+            // All tabs can fit with fixed width
             for (i, tab) in tabs.iter().enumerate() {
                 let full_name = tab.display_name();
-                let truncated_name = self.truncate_name(&full_name, max_name_width);
-                let tab_text = format!(" {} ", truncated_name);
+                let truncated_name = self.truncate_name(&full_name, TAB_CONTENT_WIDTH);
+                
+                // Pad to fixed width
+                let tab_text = format!(" {:<width$} ", truncated_name, width = TAB_CONTENT_WIDTH);
 
-                let style = if i == tab_manager.active_index() {
+                let style = if Some(i) == dragging_tab {
+                    // Dragging tab: highlighted differently
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Rgb(100, 100, 100))
+                        .add_modifier(Modifier::BOLD)
+                } else if i == tab_manager.active_index() {
                     // Active tab: black text on cyan background
                     Style::default()
                         .fg(Color::Black)
@@ -190,20 +166,20 @@ impl TabBar {
                 ));
             }
 
-            let visible_tab_count = end_index - start_index;
-            let avg_width = available_width
-                .saturating_sub(if start_index > 0 { 3 } else { 0 })
-                .saturating_sub(if end_index < tab_count { 3 } else { 0 })
-                / visible_tab_count;
-            let max_name_width = avg_width.saturating_sub(2);
-
-            for i in start_index..end_index {
-                let tab = &tabs[i];
+            for (i, tab) in tabs.iter().enumerate().skip(start_index).take(end_index - start_index) {
                 let full_name = tab.display_name();
-                let truncated_name = self.truncate_name(&full_name, max_name_width);
-                let tab_text = format!(" {} ", truncated_name);
+                let truncated_name = self.truncate_name(&full_name, TAB_CONTENT_WIDTH);
+                
+                // Pad to fixed width
+                let tab_text = format!(" {:<width$} ", truncated_name, width = TAB_CONTENT_WIDTH);
 
-                let style = if i == tab_manager.active_index() {
+                let style = if Some(i) == dragging_tab {
+                    // Dragging tab: highlighted differently
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Rgb(100, 100, 100))
+                        .add_modifier(Modifier::BOLD)
+                } else if i == tab_manager.active_index() {
                     // Active tab: black text on cyan background
                     Style::default()
                         .fg(Color::Black)

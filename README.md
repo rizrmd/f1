@@ -1,6 +1,6 @@
 # F1 - Terminal Text Editor
 
-A fast, modern terminal text editor built with Rust featuring mouse support, tabs, and VS Code-style keyboard shortcuts.
+A terminal text editor without learning curve
 
 ## Features
 

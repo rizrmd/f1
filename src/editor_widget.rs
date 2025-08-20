@@ -20,6 +20,8 @@ pub struct EditorWidget<'a> {
     focused: bool,
     show_scrollbar: bool,
     word_wrap: bool,
+    find_matches: Option<&'a Vec<crate::tab::FindMatch>>,
+    current_match_index: Option<usize>,
 }
 
 impl<'a> EditorWidget<'a> {
@@ -32,7 +34,15 @@ impl<'a> EditorWidget<'a> {
             focused: true,
             show_scrollbar: true,
             word_wrap: true,
+            find_matches: None,
+            current_match_index: None,
         }
+    }
+    
+    pub fn find_matches(mut self, matches: &'a Vec<crate::tab::FindMatch>, current_index: Option<usize>) -> Self {
+        self.find_matches = Some(matches);
+        self.current_match_index = current_index;
+        self
     }
 
     pub fn viewport_offset(mut self, offset: (usize, usize)) -> Self {
@@ -68,20 +78,32 @@ impl<'a> EditorWidget<'a> {
     }
 
     fn wrap_line(&self, line_text: &str, available_width: usize) -> Vec<String> {
+        // Fast path: no wrapping needed
         if !self.word_wrap || available_width == 0 {
+            return vec![line_text.to_string()];
+        }
+        
+        // Quick check if line might need wrapping (conservative estimate)
+        if line_text.len() <= available_width && !line_text.contains('\t') {
             return vec![line_text.to_string()];
         }
 
         let mut wrapped_lines = Vec::new();
-        let mut current_line = String::new();
+        let mut current_line = String::with_capacity(available_width);
         let mut current_width = 0;
 
         for ch in line_text.chars() {
-            let char_width = if ch == '\t' { 4 } else { 1 };
+            // Calculate actual display width for tabs
+            let char_width = if ch == '\t' { 
+                // Tab width depends on current position
+                4 - (current_width % 4)
+            } else { 
+                1 
+            };
 
             if current_width + char_width > available_width && !current_line.is_empty() {
                 wrapped_lines.push(current_line);
-                current_line = String::new();
+                current_line = String::with_capacity(available_width);
                 current_width = 0;
             }
 
@@ -108,13 +130,30 @@ impl<'a> EditorWidget<'a> {
 
         // Calculate the character offset for this wrapped line portion
         let mut char_offset = 0;
-        for i in 0..wrap_idx {
-            char_offset += all_wrapped_lines[i].chars().count();
+        for line in all_wrapped_lines.iter().take(wrap_idx) {
+            char_offset += line.chars().count();
         }
 
         // Get selection range if any
         let selection = self.cursor.get_selection();
+        
+        // Check for find matches on this line
+        let line_matches = if let Some(matches) = self.find_matches {
+            matches.iter()
+                .enumerate()
+                .filter_map(|(idx, m)| {
+                    if m.start.line == line_idx {
+                        Some((idx, m.start.column, m.end.column))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
+        let mut visual_col = 0;  // Track visual column position
         for (col, ch) in line_portion.chars().enumerate() {
             let actual_col = char_offset + col;
             let mut style = Style::default();
@@ -125,16 +164,45 @@ impl<'a> EditorWidget<'a> {
             } else {
                 false
             };
+            
+            // Check if this character is within a find match
+            let is_match = line_matches.iter().find(|(_, start, end)| actual_col >= *start && actual_col < *end);
+            let is_current_match = is_match.map(|(idx, _, _)| Some(*idx) == self.current_match_index).unwrap_or(false);
+
+            // Handle cursor positioning
+            let is_cursor_here = self.focused && cursor_col == Some(actual_col);
 
             if is_selected {
                 // Selected text: white text on blue background
                 style = style.bg(Color::Blue).fg(Color::White);
-            } else if self.focused && cursor_col == Some(actual_col) {
+            } else if is_current_match {
+                // Current find match: bright yellow background
+                style = style.bg(Color::Yellow).fg(Color::Black);
+            } else if is_match.is_some() {
+                // Other find matches: darker yellow background
+                style = style.bg(Color::Rgb(180, 180, 0)).fg(Color::Black);
+            } else if is_cursor_here {
                 // Cursor position: white text on gray background
                 style = style.bg(Color::Rgb(100, 100, 100)).fg(Color::White);
             }
 
-            spans.push(Span::styled(ch.to_string(), style));
+            // Expand tabs to spaces for display
+            if ch == '\t' {
+                // Calculate how many spaces to add to reach next tab stop
+                let spaces_to_add = 4 - (visual_col % 4);
+                for i in 0..spaces_to_add {
+                    let mut tab_style = style;
+                    // Only highlight the first space of the tab if cursor is on the tab character
+                    if is_cursor_here && i == 0 {
+                        tab_style = tab_style.bg(Color::Rgb(100, 100, 100)).fg(Color::White);
+                    }
+                    spans.push(Span::styled(" ", tab_style));
+                }
+                visual_col += spaces_to_add;
+            } else {
+                spans.push(Span::styled(ch.to_string(), style));
+                visual_col += 1;
+            }
         }
 
         // Handle cursor at end of line portion (only for the last wrapped line)
@@ -173,7 +241,24 @@ impl<'a> EditorWidget<'a> {
 
         // Get selection range if any
         let selection = self.cursor.get_selection();
+        
+        // Check for find matches on this line
+        let line_matches = if let Some(matches) = self.find_matches {
+            matches.iter()
+                .enumerate()
+                .filter_map(|(idx, m)| {
+                    if m.start.line == line_idx {
+                        Some((idx, m.start.column, m.end.column))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
+        let mut visual_col = 0;  // Track visual column position
         for (col, ch) in line_text.chars().enumerate() {
             let mut style = Style::default();
 
@@ -183,16 +268,45 @@ impl<'a> EditorWidget<'a> {
             } else {
                 false
             };
+            
+            // Check if this character is within a find match
+            let is_match = line_matches.iter().find(|(_, start, end)| col >= *start && col < *end);
+            let is_current_match = is_match.map(|(idx, _, _)| Some(*idx) == self.current_match_index).unwrap_or(false);
+
+            // Handle cursor positioning
+            let is_cursor_here = self.focused && cursor_col == Some(col);
 
             if is_selected {
                 // Selected text: white text on blue background
                 style = style.bg(Color::Blue).fg(Color::White);
-            } else if self.focused && cursor_col == Some(col) {
+            } else if is_current_match {
+                // Current find match: bright yellow background
+                style = style.bg(Color::Yellow).fg(Color::Black);
+            } else if is_match.is_some() {
+                // Other find matches: darker yellow background
+                style = style.bg(Color::Rgb(180, 180, 0)).fg(Color::Black);
+            } else if is_cursor_here {
                 // Cursor position: white text on gray background
                 style = style.bg(Color::Rgb(100, 100, 100)).fg(Color::White);
             }
 
-            spans.push(Span::styled(ch.to_string(), style));
+            // Expand tabs to spaces for display
+            if ch == '\t' {
+                // Calculate how many spaces to add to reach next tab stop
+                let spaces_to_add = 4 - (visual_col % 4);
+                for i in 0..spaces_to_add {
+                    let mut tab_style = style;
+                    // Only highlight the first space of the tab if cursor is on the tab character
+                    if is_cursor_here && i == 0 {
+                        tab_style = tab_style.bg(Color::Rgb(100, 100, 100)).fg(Color::White);
+                    }
+                    spans.push(Span::styled(" ", tab_style));
+                }
+                visual_col += spaces_to_add;
+            } else {
+                spans.push(Span::styled(ch.to_string(), style));
+                visual_col += 1;
+            }
         }
 
         // Handle cursor at end of line
@@ -283,13 +397,6 @@ impl<'a> Widget for EditorWidget<'a> {
         let visible_lines = content_area.height as usize;
         let start_line = self.viewport_offset.0;
         let end_line = (start_line + visible_lines).min(self.buffer.len_lines());
-
-        // Clear the entire inner area first to prevent artifacts
-        for y in inner.y..inner.y + inner.height {
-            for x in inner.x..inner.x + inner.width {
-                buf[(x, y)].set_symbol(" ").set_style(Style::default());
-            }
-        }
 
         let mut display_lines = Vec::new();
         let mut line_number_lines = Vec::new();

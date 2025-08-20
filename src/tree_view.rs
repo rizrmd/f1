@@ -9,6 +9,7 @@ use ratatui::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct TreeNode {
@@ -52,12 +53,6 @@ impl TreeNode {
             let entry = entry?;
             let path = entry.path();
 
-            // Skip hidden files/directories (starting with .)
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with('.') {
-                    continue;
-                }
-            }
 
             let node = TreeNode::new(path, self.depth + 1);
             entries.push(node);
@@ -125,6 +120,8 @@ pub struct TreeView {
     gitignore: GitIgnore,
     pub just_refreshed: bool,              // Flag for visual feedback
     pub clipboard: Option<ClipboardEntry>, // For copy/cut/paste operations
+    last_scroll_time: Option<Instant>,     // For scroll acceleration
+    scroll_acceleration: usize,            // Current scroll speed multiplier
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +149,8 @@ impl TreeView {
             gitignore,
             just_refreshed: false,
             clipboard: None,
+            last_scroll_time: None,
+            scroll_acceleration: 1,
         };
 
         // Update gitignore status for all nodes
@@ -323,7 +322,7 @@ impl TreeView {
         self.root = TreeNode::new(root_path.clone(), 0);
 
         // Load root children
-        if let Err(_) = self.root.load_children() {
+        if self.root.load_children().is_err() {
             return;
         }
 
@@ -343,6 +342,7 @@ impl TreeView {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_expanded_paths(&self, node: &TreeNode, paths: &mut Vec<PathBuf>) {
         if node.is_expanded && node.is_dir {
             paths.push(node.path.clone());
@@ -407,6 +407,7 @@ impl TreeView {
         items
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_visible_items<'a>(&self, node: &'a TreeNode, items: &mut Vec<&'a TreeNode>) {
         if node.depth > 0 {
             // Don't include root
@@ -552,11 +553,7 @@ impl TreeView {
             for entry in entries.flatten() {
                 let path = entry.path();
 
-                // Skip hidden files/directories (starting with .)
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') {
-                        continue;
-                    }
 
                     // Check if this item matches the search query
                     if name.to_lowercase().contains(query) {
@@ -581,6 +578,7 @@ impl TreeView {
         items
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_all_items<'a>(&self, node: &'a TreeNode, items: &mut Vec<&'a TreeNode>) {
         if node.depth > 0 {
             // Don't include root
@@ -606,14 +604,55 @@ impl TreeView {
         }
     }
 
-    pub fn scroll_up(&mut self, amount: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+    pub fn scroll_up(&mut self, base_amount: usize) {
+        // Update scroll acceleration
+        self.update_scroll_acceleration();
+        
+        // Calculate actual scroll amount with acceleration
+        let scroll_amount = base_amount.saturating_mul(self.scroll_acceleration);
+        self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
     }
 
-    pub fn scroll_down(&mut self, amount: usize, visible_height: usize) {
+    pub fn scroll_down(&mut self, base_amount: usize, visible_height: usize) {
+        // Update scroll acceleration
+        self.update_scroll_acceleration();
+        
+        // Calculate actual scroll amount with acceleration
+        let scroll_amount = base_amount.saturating_mul(self.scroll_acceleration);
+        
         let visible_items = self.get_visible_items();
         let max_scroll = visible_items.len().saturating_sub(visible_height);
-        self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
+        self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_scroll);
+    }
+    
+    fn update_scroll_acceleration(&mut self) {
+        let now = Instant::now();
+        
+        if let Some(last_time) = self.last_scroll_time {
+            // If scrolling within 150ms, increase acceleration
+            if now.duration_since(last_time).as_millis() < 150 {
+                // More aggressive acceleration for tree view
+                let increment = if self.scroll_acceleration < 3 {
+                    1  // Start with +1 for initial acceleration
+                } else if self.scroll_acceleration < 8 {
+                    2  // Medium acceleration +2
+                } else if self.scroll_acceleration < 15 {
+                    3  // Fast acceleration +3
+                } else {
+                    4  // Very fast +4
+                };
+                
+                self.scroll_acceleration = (self.scroll_acceleration + increment).min(20);
+            } else {
+                // Reset acceleration if too much time has passed
+                self.scroll_acceleration = 1;
+            }
+        } else {
+            // First scroll, start with base acceleration
+            self.scroll_acceleration = 1;
+        }
+        
+        self.last_scroll_time = Some(now);
     }
 
     pub fn resize(&mut self, new_width: u16) {
@@ -646,8 +685,11 @@ impl TreeView {
     // File management operations
     pub fn copy_selected(&mut self) {
         if let Some(item) = self.get_selected_item() {
+            let path = item.path.clone();
+            
+            // Copy to internal clipboard for file operations
             self.clipboard = Some(ClipboardEntry {
-                path: item.path.clone(),
+                path,
                 is_cut: false,
             });
         }
@@ -655,8 +697,11 @@ impl TreeView {
 
     pub fn cut_selected(&mut self) {
         if let Some(item) = self.get_selected_item() {
+            let path = item.path.clone();
+            
+            // Copy to internal clipboard for file operations
             self.clipboard = Some(ClipboardEntry {
-                path: item.path.clone(),
+                path,
                 is_cut: true,
             });
         }

@@ -89,6 +89,20 @@ impl Cursor {
         self.desired_column = None;
     }
 
+    #[allow(dead_code)]
+    pub fn clamp_position(&mut self, buffer: &RopeBuffer) {
+        // Clamp line to valid range
+        if buffer.len_lines() == 0 {
+            self.position.line = 0;
+            self.position.column = 0;
+        } else {
+            self.position.line = self.position.line.min(buffer.len_lines() - 1);
+            // Clamp column to valid range for the current line
+            let line_len = buffer.get_line_text(self.position.line).len();
+            self.position.column = self.position.column.min(line_len);
+        }
+    }
+
     pub fn move_word_left(&mut self, buffer: &RopeBuffer) {
         let line_text = buffer.get_line_text(self.position.line);
         let chars: Vec<char> = line_text.chars().collect();
@@ -102,15 +116,13 @@ impl Cursor {
             }
 
             // Move left by one to start
-            if pos > 0 {
-                pos -= 1;
-            }
+            pos = pos.saturating_sub(1);
 
             // Skip whitespace backwards
             while pos > 0
                 && chars
                     .get(pos)
-                    .map_or(false, |c| !c.is_alphanumeric() && *c != '_')
+                    .is_some_and(|c| !c.is_alphanumeric() && *c != '_')
             {
                 pos -= 1;
             }
@@ -119,7 +131,7 @@ impl Cursor {
             while pos > 0
                 && chars
                     .get(pos - 1)
-                    .map_or(false, |c| c.is_alphanumeric() || *c == '_')
+                    .is_some_and(|c| c.is_alphanumeric() || *c == '_')
             {
                 pos -= 1;
             }
@@ -144,7 +156,7 @@ impl Cursor {
             while pos < line_len
                 && chars
                     .get(pos)
-                    .map_or(false, |c| c.is_alphanumeric() || *c == '_')
+                    .is_some_and(|c| c.is_alphanumeric() || *c == '_')
             {
                 pos += 1;
             }
@@ -153,7 +165,7 @@ impl Cursor {
             while pos < line_len
                 && chars
                     .get(pos)
-                    .map_or(false, |c| !c.is_alphanumeric() && *c != '_')
+                    .is_some_and(|c| !c.is_alphanumeric() && *c != '_')
             {
                 pos += 1;
             }
@@ -292,7 +304,7 @@ impl Cursor {
 
         // Handle position at end of line
         let actual_column = if self.position.column >= chars.len() {
-            if chars.len() > 0 {
+            if !chars.is_empty() {
                 chars.len() - 1
             } else {
                 return;

@@ -49,6 +49,7 @@ impl UI {
         sidebar_width: u16,
         focus_mode: &FocusMode,
         status_message: &Option<String>,
+        dragging_tab: Option<usize>,
     ) {
         let size = frame.area();
 
@@ -62,10 +63,11 @@ impl UI {
             .split(size);
 
         // Render tab bar
-        self.tab_bar.draw(frame, chunks[0], tab_manager);
+        self.tab_bar.draw(frame, chunks[0], tab_manager, dragging_tab);
+
+        let main_area = chunks[1];
 
         // Split main content area into sidebar and editor if tree view exists
-        let main_area = chunks[1];
         if let Some(tree_view) = tree_view {
             // Create horizontal layout with tree view and editor
             let horizontal_chunks = Layout::default()
@@ -82,40 +84,88 @@ impl UI {
             // Render editor content in the remaining space
             let editor_area = horizontal_chunks[1];
             if let Some(tab) = tab_manager.active_tab_mut() {
+                // Check if we need to show find/replace bar in editor area
+                let final_editor_area = if tab.find_replace_state.active {
+                    let bar_height = if tab.find_replace_state.is_replace_mode { 2 } else { 1 };
+                    let split = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(bar_height),
+                            Constraint::Min(0),
+                        ])
+                        .split(editor_area);
+                    
+                    // Draw find/replace bar at top of editor
+                    self.draw_find_replace_bar(frame, split[0], &tab.find_replace_state);
+                    split[1]
+                } else {
+                    editor_area
+                };
+
                 let is_editor_focused = matches!(focus_mode, FocusMode::Editor);
                 if tab.preview_mode && tab.is_markdown() {
                     // Render markdown preview
                     let content = tab.buffer.to_string();
                     let preview = crate::markdown_widget::MarkdownWidget::new(&content)
                         .viewport_offset(tab.viewport_offset);
-                    frame.render_widget(preview, editor_area);
+                    frame.render_widget(preview, final_editor_area);
                 } else {
                     // Render normal editor
-                    let editor = EditorWidget::new(&tab.buffer, &tab.cursor)
+                    let mut editor = EditorWidget::new(&tab.buffer, &tab.cursor)
                         .viewport_offset(tab.viewport_offset)
                         .show_line_numbers(true)
                         .focused(is_editor_focused)
                         .word_wrap(tab.word_wrap);
-                    frame.render_widget(editor, editor_area);
+                    
+                    // Add find matches if search is active
+                    if tab.find_replace_state.active && !tab.find_replace_state.matches.is_empty() {
+                        editor = editor.find_matches(&tab.find_replace_state.matches, tab.find_replace_state.current_match_index);
+                    }
+                    
+                    frame.render_widget(editor, final_editor_area);
                 }
             }
         } else {
             // No tree view, render editor in full main area
             if let Some(tab) = tab_manager.active_tab_mut() {
+                // Check if we need to show find/replace bar
+                let final_editor_area = if tab.find_replace_state.active {
+                    let bar_height = if tab.find_replace_state.is_replace_mode { 2 } else { 1 };
+                    let split = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(bar_height),
+                            Constraint::Min(0),
+                        ])
+                        .split(main_area);
+                    
+                    // Draw find/replace bar at top of editor
+                    self.draw_find_replace_bar(frame, split[0], &tab.find_replace_state);
+                    split[1]
+                } else {
+                    main_area
+                };
+
                 if tab.preview_mode && tab.is_markdown() {
                     // Render markdown preview
                     let content = tab.buffer.to_string();
                     let preview = crate::markdown_widget::MarkdownWidget::new(&content)
                         .viewport_offset(tab.viewport_offset);
-                    frame.render_widget(preview, main_area);
+                    frame.render_widget(preview, final_editor_area);
                 } else {
                     // Render normal editor
-                    let editor = EditorWidget::new(&tab.buffer, &tab.cursor)
+                    let mut editor = EditorWidget::new(&tab.buffer, &tab.cursor)
                         .viewport_offset(tab.viewport_offset)
                         .show_line_numbers(true)
                         .focused(true)
                         .word_wrap(tab.word_wrap);
-                    frame.render_widget(editor, main_area);
+                    
+                    // Add find matches if search is active
+                    if tab.find_replace_state.active && !tab.find_replace_state.matches.is_empty() {
+                        editor = editor.find_matches(&tab.find_replace_state.matches, tab.find_replace_state.current_match_index);
+                    }
+                    
+                    frame.render_widget(editor, final_editor_area);
                 }
             }
         }
@@ -435,12 +485,195 @@ impl UI {
         frame.render_widget(buttons_paragraph, dialog_chunks[4]);
     }
 
+    fn draw_find_replace_bar(&self, frame: &mut Frame, area: Rect, find_state: &crate::tab::FindReplaceState) {
+        use crate::tab::FindFocusedField;
+        
+        // Clear background
+        let bg_style = Style::default().bg(Color::Rgb(40, 40, 40));
+        frame.render_widget(Block::default().style(bg_style), area);
+
+        // Split into rows for find and optionally replace
+        let rows = if find_state.is_replace_mode {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .split(area)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                ])
+                .split(area)
+        };
+
+        // Draw find row
+        let find_row = rows[0];
+        let find_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(10),  // "Find:" label (aligned with Replace)
+                Constraint::Min(20),     // Input field (flexible)
+                Constraint::Length(12),  // Match counter
+                Constraint::Length(12),  // Find Next button (with padding)
+                Constraint::Length(5),   // Case button
+                Constraint::Length(5),   // Whole word button
+                Constraint::Length(2),   // Right padding
+            ])
+            .split(find_row);
+
+        // Find label
+        let find_label = Span::styled("  Find:", Style::default().fg(Color::Gray));
+        frame.render_widget(Paragraph::new(find_label), find_chunks[0]);
+
+        // Find input field
+        let find_input_style = if find_state.focused_field == FindFocusedField::Find {
+            Style::default().bg(Color::Rgb(60, 60, 60)).fg(Color::White)
+        } else {
+            Style::default().bg(Color::Rgb(50, 50, 50)).fg(Color::Gray)
+        };
+        
+        let mut find_text = find_state.find_query.clone();
+        if find_state.focused_field == FindFocusedField::Find && find_state.find_cursor_position <= find_text.len() {
+            find_text.insert(find_state.find_cursor_position, '│');
+        }
+        
+        let find_input = Paragraph::new(find_text)
+            .style(find_input_style);
+        frame.render_widget(find_input, find_chunks[1]);
+
+        // Match counter
+        let match_text = if !find_state.matches.is_empty() {
+            if let Some(idx) = find_state.current_match_index {
+                format!(" {}/{} ", idx + 1, find_state.matches.len())
+            } else {
+                format!(" 0/{} ", find_state.matches.len())
+            }
+        } else if !find_state.find_query.is_empty() {
+            " No match ".to_string()
+        } else {
+            String::new()
+        };
+        let match_counter = Paragraph::new(match_text)
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM))
+            .alignment(Alignment::Center);
+        frame.render_widget(match_counter, find_chunks[2]);
+
+        // Find Next button with padding
+        let find_next_btn = Paragraph::new(" Find Next ")
+            .style(Style::default()
+                .bg(Color::Rgb(60, 90, 120))
+                .fg(Color::White))
+            .alignment(Alignment::Center);
+        frame.render_widget(find_next_btn, find_chunks[3]);
+
+        // Case sensitive button
+        let case_btn_style = if find_state.case_sensitive {
+            Style::default()
+                .bg(Color::Rgb(70, 120, 70))
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .bg(Color::Rgb(50, 50, 50))
+                .fg(Color::Rgb(150, 150, 150))
+        };
+        let case_btn = Paragraph::new(" Aa ")
+            .style(case_btn_style)
+            .alignment(Alignment::Center);
+        frame.render_widget(case_btn, find_chunks[4]);
+
+        // Whole word button
+        let word_btn_style = if find_state.whole_word {
+            Style::default()
+                .bg(Color::Rgb(70, 120, 70))
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .bg(Color::Rgb(50, 50, 50))
+                .fg(Color::Rgb(150, 150, 150))
+        };
+        let word_btn = Paragraph::new(" W ")
+            .style(word_btn_style)
+            .alignment(Alignment::Center);
+        frame.render_widget(word_btn, find_chunks[5]);
+
+        // Right padding (no close button)
+        // Close functionality is handled by pressing Escape
+
+        // Draw replace row if in replace mode
+        if find_state.is_replace_mode && rows.len() > 1 {
+            let replace_row = rows[1];
+            let replace_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(10),  // "Replace:" label (aligned with Find)
+                    Constraint::Min(20),     // Input field (flexible, same as Find)
+                    Constraint::Length(12),  // Space matching Find's match counter
+                    Constraint::Length(12),  // Replace button (matches Find Next position)
+                    Constraint::Length(5),   // Space matching Case button
+                    Constraint::Length(5),   // Space matching Whole word button
+                    Constraint::Length(2),   // Right padding (same as Find)
+                ])
+                .split(replace_row);
+
+            // Replace label
+            let replace_label = Span::styled("  Replace:", Style::default().fg(Color::Gray));
+            frame.render_widget(Paragraph::new(replace_label), replace_chunks[0]);
+
+            // Replace input field
+            let replace_input_style = if find_state.focused_field == FindFocusedField::Replace {
+                Style::default().bg(Color::Rgb(60, 60, 60)).fg(Color::White)
+            } else {
+                Style::default().bg(Color::Rgb(50, 50, 50)).fg(Color::Gray)
+            };
+            
+            let mut replace_text = find_state.replace_query.clone();
+            if find_state.focused_field == FindFocusedField::Replace && find_state.replace_cursor_position <= replace_text.len() {
+                replace_text.insert(find_state.replace_cursor_position, '│');
+            }
+            
+            let replace_input = Paragraph::new(replace_text)
+                .style(replace_input_style);
+            frame.render_widget(replace_input, replace_chunks[1]);
+
+            // Empty space for alignment with Find row
+            // (aligns with match counter in Find row)
+            
+            // Replace button (aligns with Find Next button)
+            let replace_btn = Paragraph::new(" Replace ")
+                .style(Style::default()
+                    .bg(Color::Rgb(50, 100, 50))
+                    .fg(Color::White))
+                .alignment(Alignment::Center);
+            frame.render_widget(replace_btn, replace_chunks[3]);
+
+            // Replace All button (spans positions 4 and 5)
+            let replace_all_area = Rect {
+                x: replace_chunks[4].x,
+                y: replace_chunks[4].y,
+                width: replace_chunks[4].width + replace_chunks[5].width,
+                height: replace_chunks[4].height,
+            };
+            let replace_all_btn = Paragraph::new(" Replace All ")
+                .style(Style::default()
+                    .bg(Color::Rgb(50, 100, 50))
+                    .fg(Color::White))
+                .alignment(Alignment::Center);
+            frame.render_widget(replace_all_btn, replace_all_area);
+        }
+    }
+
     fn draw_file_picker(&self, frame: &mut Frame, picker_state: &crate::menu::FilePickerState) {
         let size = frame.area();
 
-        // Center the file picker modal
-        let modal_width = 70u16.min(size.width.saturating_sub(4));
-        let modal_height = 24u16.min(size.height.saturating_sub(4));
+        // Center the file picker modal - make it slightly larger without border
+        let modal_width = 80u16.min(size.width.saturating_sub(4));
+        let modal_height = 28u16.min(size.height.saturating_sub(4));
         let modal_x = (size.width.saturating_sub(modal_width)) / 2;
         let modal_y = (size.height.saturating_sub(modal_height)) / 2;
 
@@ -451,51 +684,54 @@ impl UI {
             height: modal_height,
         };
 
-        // Clear the area
+        // Clear the area with a subtle background
         frame.render_widget(Clear, modal_area);
+        
+        // Fill background with a subtle color
+        let background = Block::default()
+            .style(Style::default().bg(Color::Rgb(25, 25, 30)));
+        frame.render_widget(background, modal_area);
 
-        // Create layout
+        // Create layout with padding
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
-                Constraint::Length(1), // Current directory
                 Constraint::Length(1), // Search input
-                Constraint::Length(1), // Separator
                 Constraint::Min(0),    // File list
             ])
             .split(modal_area);
 
-        // Render modal border with current directory in title
-        let title = format!(" 📁 {} ", picker_state.current_dir.display());
-        let modal_block = Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .style(Style::default().bg(Color::Black).fg(Color::White));
-        frame.render_widget(modal_block, modal_area);
-
-        // Current directory info
-        let dir_info = format!(
-            "📂 {}",
-            picker_state
-                .current_dir
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("/")
-        );
-        let dir_paragraph =
-            Paragraph::new(Line::from(dir_info)).style(Style::default().fg(Color::Cyan));
-        frame.render_widget(dir_paragraph, modal_chunks[0]);
-
-        // Search input
-        let search_text = if picker_state.search_query.is_empty() {
-            "🔍 Type to search...".to_string()
-        } else {
-            format!("🔍 {}", picker_state.search_query)
+        // Search input with padding
+        let search_area = Rect {
+            x: modal_chunks[0].x,
+            y: modal_chunks[0].y,
+            width: modal_chunks[0].width,
+            height: 1,
         };
-        let search_input = Paragraph::new(Line::from(search_text))
-            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
-        frame.render_widget(search_input, modal_chunks[1]);
+        
+        // Draw search input with proper padding
+        let search_text = if picker_state.search_query.is_empty() {
+            "  Type to search files...".to_string()
+        } else {
+            format!("  {}", picker_state.search_query)
+        };
+        
+        let search_style = if picker_state.search_query.is_empty() {
+            Style::default().fg(Color::Rgb(100, 100, 100)).bg(Color::Rgb(35, 35, 40))
+        } else {
+            Style::default().fg(Color::White).bg(Color::Rgb(35, 35, 40))
+        };
+        
+        let mut search_spans = vec![Span::styled(&search_text, search_style)];
+        // Add cursor at the end if there's a query
+        if !picker_state.search_query.is_empty() {
+            search_spans.push(Span::styled("│", Style::default().fg(Color::Cyan).bg(Color::Rgb(35, 35, 40))));
+        }
+        
+        let search_input = Paragraph::new(Line::from(search_spans))
+            .style(Style::default().bg(Color::Rgb(35, 35, 40)));
+        frame.render_widget(search_input, search_area);
 
         // File list with two lines per item when searching
         let is_searching = !picker_state.search_query.is_empty();
@@ -504,7 +740,7 @@ impl UI {
         let total_items = picker_state.filtered_items.len();
 
         // Calculate scrollbar area
-        let scrollbar_width = if total_items * items_per_entry > modal_chunks[3].height as usize {
+        let scrollbar_width = if total_items * items_per_entry > modal_chunks[1].height as usize {
             1
         } else {
             0
@@ -513,7 +749,7 @@ impl UI {
         let file_list_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(0), Constraint::Length(scrollbar_width)])
-            .split(modal_chunks[3]);
+            .split(modal_chunks[1]);
 
         let file_content_area = file_list_chunks[0];
         let file_scrollbar_area = if scrollbar_width > 0 {
@@ -551,20 +787,20 @@ impl UI {
             };
 
             let style = if is_selected {
-                Style::default().bg(Color::Blue).fg(Color::White)
+                Style::default().bg(Color::Rgb(60, 60, 70)).fg(Color::White)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(Color::Rgb(200, 200, 200)).bg(Color::Rgb(25, 25, 30))
             };
 
             let dim_style = if is_selected {
-                Style::default().bg(Color::Blue).fg(Color::Gray)
+                Style::default().bg(Color::Rgb(60, 60, 70)).fg(Color::Rgb(150, 150, 150))
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::Rgb(100, 100, 100)).bg(Color::Rgb(25, 25, 30))
             };
 
             // Icon based on type using the modular icon system
             let icon = if item.name == ".." {
-                "⬆️"
+                "↑"
             } else if item.is_dir {
                 file_icons::get_directory_icon(false) // Always show closed folder in file picker
             } else {
@@ -572,8 +808,8 @@ impl UI {
             };
 
             // First line: icon and name (padded to content area width)
-            let name_line = format!(" {}  {}", icon, item.name);
-            let content_width = (file_content_area.width as usize).saturating_sub(2);
+            let name_line = format!("  {}  {}", icon, item.name);
+            let content_width = file_content_area.width as usize;
             let padded_name_line = format!("{:<width$}", name_line, width = content_width);
             file_lines.push(Line::from(Span::styled(padded_name_line, style)));
 
@@ -585,7 +821,7 @@ impl UI {
                     } else {
                         item.relative_path.clone()
                     };
-                let path_line = format!("    {}", path_to_show);
+                let path_line = format!("      {}", path_to_show);
                 let padded_path_line = format!("{:<width$}", path_line, width = content_width);
                 file_lines.push(Line::from(Span::styled(padded_path_line, dim_style)));
             }
@@ -599,8 +835,8 @@ impl UI {
             let scrollbar_state = ScrollbarState::new(total_items, visible_items, start_index);
 
             let scrollbar = VerticalScrollbar::new(scrollbar_state)
-                .style(Style::default().fg(Color::Reset))
-                .thumb_style(Style::default().fg(Color::White))
+                .style(Style::default().fg(Color::Rgb(50, 50, 55)))
+                .thumb_style(Style::default().fg(Color::Rgb(100, 100, 110)))
                 .track_symbols(VerticalScrollbar::minimal());
 
             frame.render_widget(scrollbar, scrollbar_area);

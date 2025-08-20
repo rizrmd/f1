@@ -11,6 +11,8 @@ pub struct MenuItem {
     pub label: String,
     pub shortcut: Option<String>,
     pub action: MenuAction,
+    pub is_checkbox: bool,
+    pub is_checked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,23 +107,36 @@ impl MenuComponent {
                     .fg(self.foreground_color)
             };
 
+            // Add checkbox prefix if it's a checkbox item
+            let checkbox_prefix = if item.is_checkbox {
+                if item.is_checked {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }
+            } else {
+                ""
+            };
+
+            let label_with_checkbox = format!("{}{}", checkbox_prefix, item.label);
+            
             let line_text = if let Some(shortcut) = &item.shortcut {
                 // Right-align shortcut: " item_name                shortcut"
                 let available_space = self.width as usize - 2; // -2 for left and right padding
                 let shortcut_len = shortcut.len();
-                let item_len = item.label.len();
+                let item_len = label_with_checkbox.len();
 
                 if item_len + shortcut_len < available_space {
                     // Enough space to separate item and shortcut
                     let spaces_needed = available_space - item_len - shortcut_len;
-                    format!(" {}{}{} ", item.label, " ".repeat(spaces_needed), shortcut)
+                    format!(" {}{}{} ", label_with_checkbox, " ".repeat(spaces_needed), shortcut)
                 } else {
                     // Not enough space, truncate item name
                     let max_item_len = available_space.saturating_sub(shortcut_len + 1);
-                    let truncated_item = if item.label.len() > max_item_len {
-                        format!("{}…", &item.label[..max_item_len.saturating_sub(1)])
+                    let truncated_item = if label_with_checkbox.len() > max_item_len {
+                        format!("{}…", &label_with_checkbox[..max_item_len.saturating_sub(1)])
                     } else {
-                        item.label.clone()
+                        label_with_checkbox.clone()
                     };
                     let spaces_needed = available_space - truncated_item.len() - shortcut_len;
                     format!(
@@ -132,7 +147,7 @@ impl MenuComponent {
                     )
                 }
             } else {
-                let mut text = format!(" {}", item.label);
+                let mut text = format!(" {}", label_with_checkbox);
                 while text.len() < self.width as usize {
                     text.push(' ');
                 }
@@ -171,11 +186,19 @@ impl MenuItem {
             label: label.to_string(),
             shortcut: None,
             action,
+            is_checkbox: false,
+            is_checked: false,
         }
     }
 
     pub fn with_shortcut(mut self, shortcut: &str) -> Self {
         self.shortcut = Some(shortcut.to_string());
+        self
+    }
+
+    pub fn with_checkbox(mut self, checked: bool) -> Self {
+        self.is_checkbox = true;
+        self.is_checked = checked;
         self
     }
 }

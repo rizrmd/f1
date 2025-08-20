@@ -233,7 +233,7 @@ impl<'a> MarkdownWidget<'a> {
                     let mut code_text = String::new();
                     let mut found_end = false;
 
-                    while let Some(ch) = chars.next() {
+                    for ch in chars.by_ref() {
                         if ch == '`' {
                             found_end = true;
                             break;
@@ -300,7 +300,7 @@ impl<'a> MarkdownWidget<'a> {
                         let mut italic_text = String::new();
                         let mut found_end = false;
 
-                        while let Some(ch) = chars.next() {
+                        for ch in chars.by_ref() {
                             if ch == '*' {
                                 found_end = true;
                                 break;
@@ -513,8 +513,7 @@ impl<'a> MarkdownWidget<'a> {
         }
 
         // Fill remaining columns if row is shorter
-        for i in row.len()..col_widths.len() {
-            let width = col_widths[i];
+        for &width in col_widths.iter().skip(row.len()) {
             let empty_cell = format!(" {:<width$} ", "", width = width.saturating_sub(2));
             spans.push(Span::styled(empty_cell, Style::default()));
             spans.push(Span::styled("│", Style::default().fg(Color::Blue)));

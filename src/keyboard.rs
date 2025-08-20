@@ -1,3 +1,4 @@
+use arboard::Clipboard;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
@@ -20,6 +21,17 @@ pub fn handle_key_event(
 
     // On macOS, Option key might be reported as ALT or META
     let has_option = has_alt || has_meta;
+    
+    // On macOS, Cmd key is often not passed through terminal emulators
+    // Some terminals map Cmd to other modifiers or don't pass it at all
+    // We'll use Ctrl as the primary modifier for all platforms
+    #[cfg(target_os = "macos")]
+    let has_cmd = has_super || has_meta;
+    #[cfg(not(target_os = "macos"))]
+    let has_cmd = false;
+    
+    // Use either Ctrl or Cmd (on macOS) for standard shortcuts
+    let has_primary_modifier = has_ctrl || has_cmd;
 
     let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
@@ -42,26 +54,40 @@ pub fn handle_key_event(
         // Previous Tab - Ctrl+[
         KeyCode::Char('[') if has_ctrl => Some(EditorCommand::PrevTab),
 
-        // Select all - Ctrl+A
-        KeyCode::Char('a') if has_ctrl => {
+        // Select all - Ctrl+A or Cmd+A
+        KeyCode::Char('a') if has_primary_modifier => {
             cursor.select_all(buffer);
             None
         }
 
-        // Copy - Ctrl+C
-        KeyCode::Char('c') if has_ctrl => {
+        // Copy - Ctrl+C or Cmd+C
+        KeyCode::Char('c') if has_primary_modifier => {
             copy_selection(buffer, cursor);
             None
         }
 
-        // Cut - Ctrl+X
-        KeyCode::Char('x') if has_ctrl => {
-            cut_selection(buffer, cursor);
+        // Cut - Ctrl+X or Cmd+X (cuts selection or current line if no selection)
+        KeyCode::Char('x') if has_primary_modifier => {
+            if cursor.has_selection() {
+                cut_selection(buffer, cursor);
+            } else {
+                cut_current_line(buffer, cursor);
+            }
+            Some(EditorCommand::Modified)
+        }
+        
+        // Cut current line - Ctrl+K or Cmd+K (alternative shortcut)
+        KeyCode::Char('k') if has_primary_modifier => {
+            if cursor.has_selection() {
+                cut_selection(buffer, cursor);
+            } else {
+                cut_current_line(buffer, cursor);
+            }
             Some(EditorCommand::Modified)
         }
 
-        // Paste - Ctrl+V
-        KeyCode::Char('v') if has_ctrl => {
+        // Paste - Ctrl+V or Cmd+V
+        KeyCode::Char('v') if has_primary_modifier => {
             if cursor.has_selection() {
                 delete_selection(buffer, cursor);
             }
@@ -69,12 +95,12 @@ pub fn handle_key_event(
             Some(EditorCommand::Modified)
         }
 
-        // Undo - Ctrl+Z
-        KeyCode::Char('z') if has_ctrl && !has_shift => Some(EditorCommand::Undo),
+        // Undo - Ctrl+Z or Cmd+Z
+        KeyCode::Char('z') if has_primary_modifier && !has_shift => Some(EditorCommand::Undo),
 
-        // Redo - Ctrl+Shift+Z or Ctrl+Y
-        KeyCode::Char('z') if has_ctrl && has_shift => Some(EditorCommand::Redo),
-        KeyCode::Char('y') if has_ctrl => Some(EditorCommand::Redo),
+        // Redo - Ctrl+Shift+Z, Cmd+Shift+Z, or Ctrl+Y
+        KeyCode::Char('z') if has_primary_modifier && has_shift => Some(EditorCommand::Redo),
+        KeyCode::Char('y') if has_primary_modifier => Some(EditorCommand::Redo),
 
         // Toggle Preview - Ctrl+U (for markdown files)
         KeyCode::Char('u') if has_ctrl => Some(EditorCommand::TogglePreview),
@@ -90,6 +116,12 @@ pub fn handle_key_event(
 
         // Current Tab - Ctrl+G
         KeyCode::Char('g') if has_ctrl => Some(EditorCommand::CurrentTab),
+
+        // Find - Ctrl+F
+        KeyCode::Char('f') if has_ctrl && !has_shift => Some(EditorCommand::Find),
+
+        // Find and Replace - Ctrl+Shift+F
+        KeyCode::Char('f') if has_ctrl && has_shift => Some(EditorCommand::FindReplace),
 
         // Word navigation with selection - Shift+Option/Alt + Arrow
         KeyCode::Left if has_option && has_shift => {
@@ -349,8 +381,15 @@ fn copy_selection(buffer: &RopeBuffer, cursor: &Cursor) {
 
         if end_idx > start_idx {
             let selected_text = buffer.slice(start_idx..end_idx).to_string();
+            
+            // Copy to internal clipboard
             if let Ok(mut clipboard) = get_clipboard().lock() {
-                *clipboard = selected_text;
+                *clipboard = selected_text.clone();
+            }
+            
+            // Also copy to system clipboard
+            if let Ok(mut system_clipboard) = Clipboard::new() {
+                let _ = system_clipboard.set_text(&selected_text);
             }
         }
     }
@@ -361,17 +400,97 @@ fn cut_selection(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
     delete_selection(buffer, cursor);
 }
 
-fn paste_from_clipboard(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
-    if let Ok(clipboard) = get_clipboard().lock() {
-        if !clipboard.is_empty() {
-            let char_idx = cursor.to_char_index(buffer);
-            buffer.insert(char_idx, &clipboard);
+fn cut_current_line(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
+    let current_line = cursor.position.line;
+    
+    // Get the entire line including the newline character
+    let line_start_idx = buffer.line_to_char(current_line);
+    let next_line_start = if current_line + 1 < buffer.len_lines() {
+        buffer.line_to_char(current_line + 1)
+    } else {
+        // Last line - just go to end of buffer
+        buffer.len_chars()
+    };
+    
+    // Copy the line to clipboard
+    if next_line_start > line_start_idx {
+        let line_text = buffer.slice(line_start_idx..next_line_start).to_string();
+        
+        // Copy to internal clipboard
+        if let Ok(mut clipboard) = get_clipboard().lock() {
+            *clipboard = line_text.clone();
+        }
+        
+        // Also copy to system clipboard
+        if let Ok(mut system_clipboard) = Clipboard::new() {
+            let _ = system_clipboard.set_text(&line_text);
+        }
+        
+        // Delete the line
+        buffer.remove(line_start_idx..next_line_start);
+        
+        // Move cursor to the beginning of the line (which is now the next line)
+        cursor.position.column = 0;
+        // Adjust line position if we deleted the last line
+        if cursor.position.line >= buffer.len_lines() && buffer.len_lines() > 0 {
+            cursor.position.line = buffer.len_lines() - 1;
+        }
+    }
+}
 
-            // Move cursor to end of pasted text
-            for _ in clipboard.chars() {
-                cursor.move_right(buffer);
+fn paste_from_clipboard(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
+    // Try system clipboard first
+    let text_to_paste = if let Ok(mut system_clipboard) = Clipboard::new() {
+        if let Ok(text) = system_clipboard.get_text() {
+            // Update internal clipboard with system clipboard content
+            if let Ok(mut clipboard) = get_clipboard().lock() {
+                *clipboard = text.clone();
+            }
+            text
+        } else {
+            // Fall back to internal clipboard
+            if let Ok(clipboard) = get_clipboard().lock() {
+                clipboard.clone()
+            } else {
+                return;
             }
         }
+    } else {
+        // Fall back to internal clipboard
+        if let Ok(clipboard) = get_clipboard().lock() {
+            clipboard.clone()
+        } else {
+            return;
+        }
+    };
+
+    if !text_to_paste.is_empty() {
+        let char_idx = cursor.to_char_index(buffer);
+        let initial_column = cursor.position.column;
+        
+        // Insert the text all at once - this is already efficient in ropey
+        buffer.insert(char_idx, &text_to_paste);
+
+        // Calculate new cursor position efficiently without iterating through characters
+        let lines: Vec<&str> = text_to_paste.lines().collect();
+        let num_new_lines = lines.len().saturating_sub(1);
+        
+        if num_new_lines > 0 {
+            // Multi-line paste: cursor goes to the end of the last pasted line
+            cursor.position.line += num_new_lines;
+            // For multi-line paste, we need to account for text after cursor on original line
+            // The last line length is where the cursor should be
+            cursor.position.column = lines.last().unwrap_or(&"").len();
+            
+            // If we pasted in the middle of a line, the remaining text is now after our cursor
+            // on the last line of the pasted content, so we don't need to adjust further
+        } else {
+            // Single line paste: just advance by the pasted text length
+            cursor.position.column = initial_column + text_to_paste.len();
+        }
+        
+        // Clear selection after paste
+        cursor.clear_selection();
     }
 }
 
@@ -395,4 +514,6 @@ pub enum EditorCommand {
     ToggleWordWrap,
     FocusTreeView,
     FocusEditor,
+    Find,
+    FindReplace,
 }

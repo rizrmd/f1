@@ -1,6 +1,7 @@
 use crate::gitignore::GitIgnore;
 use crate::ui::{MenuAction, MenuComponent, MenuItem};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuState {
@@ -31,7 +32,7 @@ pub struct TreeContextMenuState {
     pub position: (u16, u16), // (x, y) position for the menu
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct FilePickerState {
     pub search_query: String,
     pub filtered_items: Vec<FileItem>,
@@ -40,6 +41,22 @@ pub struct FilePickerState {
     pub current_dir: PathBuf,
     pub all_items: Vec<FileItem>,
     gitignore: GitIgnore,
+    last_scroll_time: Option<Instant>,
+    scroll_acceleration: usize,
+}
+
+impl PartialEq for FilePickerState {
+    fn eq(&self, other: &Self) -> bool {
+        self.search_query == other.search_query
+            && self.filtered_items == other.filtered_items
+            && self.selected_index == other.selected_index
+            && self.hovered_index == other.hovered_index
+            && self.current_dir == other.current_dir
+            && self.all_items == other.all_items
+            && self.scroll_acceleration == other.scroll_acceleration
+        // Note: Skipping last_scroll_time comparison as Instant doesn't impl PartialEq
+        // and gitignore comparison as it's internal state
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +80,8 @@ impl FilePickerState {
             current_dir: current_dir.clone(),
             all_items: Vec::new(),
             gitignore: GitIgnore::new(current_dir.clone()), // Temporary
+            last_scroll_time: None,
+            scroll_acceleration: 1,
         };
 
         let repo_root = temp_state.find_repo_root(&current_dir);
@@ -76,6 +95,8 @@ impl FilePickerState {
             current_dir: current_dir.clone(),
             all_items: Vec::new(),
             gitignore,
+            last_scroll_time: None,
+            scroll_acceleration: 1,
         };
         state.load_current_directory();
         state
@@ -160,9 +181,24 @@ impl FilePickerState {
                 }
             }
 
-            // Search in subdirectories (recursive)
-            let current_dir = self.current_dir.clone();
-            self.search_recursive(&current_dir, &query, 0, 3); // Max depth 3
+            // Search in subdirectories (recursive) - start from depth 1 to avoid duplicating current dir
+            if let Ok(entries) = std::fs::read_dir(&self.current_dir) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        
+                        // Skip hidden directories
+                        if !name.starts_with('.') {
+                            self.search_recursive(&path, &query, 1, 3); // Start at depth 1
+                        }
+                    }
+                }
+            }
         }
         self.selected_index = 0;
         self.hovered_index = None; // Clear hover when filtering
@@ -224,8 +260,8 @@ impl FilePickerState {
         self.load_current_directory();
     }
 
-    fn find_repo_root(&self, path: &PathBuf) -> PathBuf {
-        let mut current = path.clone();
+    fn find_repo_root(&self, path: &Path) -> PathBuf {
+        let mut current = path.to_path_buf();
         loop {
             if current.join(".git").exists() {
                 return current;
@@ -234,7 +270,7 @@ impl FilePickerState {
                 current = parent.to_path_buf();
             } else {
                 // If no .git found, use the current directory
-                return path.clone();
+                return path.to_path_buf();
             }
         }
     }
@@ -261,6 +297,57 @@ impl FilePickerState {
 
     pub fn get_selected_item(&self) -> Option<&FileItem> {
         self.filtered_items.get(self.selected_index)
+    }
+    
+    pub fn scroll_up(&mut self, base_amount: usize) {
+        // Update scroll acceleration
+        self.update_scroll_acceleration();
+        
+        // Calculate actual scroll amount with acceleration
+        let scroll_amount = base_amount.saturating_mul(self.scroll_acceleration);
+        self.selected_index = self.selected_index.saturating_sub(scroll_amount);
+        self.hovered_index = None; // Clear hover when scrolling
+    }
+    
+    pub fn scroll_down(&mut self, base_amount: usize) {
+        // Update scroll acceleration
+        self.update_scroll_acceleration();
+        
+        // Calculate actual scroll amount with acceleration
+        let scroll_amount = base_amount.saturating_mul(self.scroll_acceleration);
+        let max_index = self.filtered_items.len().saturating_sub(1);
+        self.selected_index = (self.selected_index + scroll_amount).min(max_index);
+        self.hovered_index = None; // Clear hover when scrolling
+    }
+    
+    fn update_scroll_acceleration(&mut self) {
+        let now = Instant::now();
+        
+        if let Some(last_time) = self.last_scroll_time {
+            // If scrolling within 150ms, increase acceleration
+            if now.duration_since(last_time).as_millis() < 150 {
+                // More aggressive acceleration for file picker
+                let increment = if self.scroll_acceleration < 3 {
+                    1  // Start with +1 for initial acceleration
+                } else if self.scroll_acceleration < 8 {
+                    2  // Medium acceleration +2
+                } else if self.scroll_acceleration < 15 {
+                    3  // Fast acceleration +3
+                } else {
+                    4  // Very fast +4
+                };
+                
+                self.scroll_acceleration = (self.scroll_acceleration + increment).min(20);
+            } else {
+                // Reset acceleration if too much time has passed
+                self.scroll_acceleration = 1;
+            }
+        } else {
+            // First scroll, start with base acceleration
+            self.scroll_acceleration = 1;
+        }
+        
+        self.last_scroll_time = Some(now);
     }
 }
 
@@ -298,24 +385,27 @@ impl MenuSystem {
         _is_markdown: bool,
         _in_preview_mode: bool,
         word_wrap_enabled: bool,
+        tree_view_enabled: bool,
+        find_inline_enabled: bool,
     ) {
         self.state = match self.state {
             MenuState::Closed => {
-                let word_wrap_text = if word_wrap_enabled {
-                    "Disable Word Wrap"
-                } else {
-                    "Enable Word Wrap"
-                };
-
                 let items = vec![
                     MenuItem::new("Current Tab", MenuAction::Custom("current_tab".to_string()))
                         .with_shortcut("Ctrl+G"),
                     MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                         .with_shortcut("Ctrl+P"),
+                    MenuItem::new("Tree View", MenuAction::Custom("toggle_tree_view".to_string()))
+                        .with_checkbox(tree_view_enabled)
+                        .with_shortcut("Ctrl+T"),
+                    MenuItem::new("Find Inline", MenuAction::Custom("toggle_find_inline".to_string()))
+                        .with_checkbox(find_inline_enabled)
+                        .with_shortcut("Ctrl+F"),
                     MenuItem::new(
-                        word_wrap_text,
+                        "Word Wrap",
                         MenuAction::Custom("toggle_word_wrap".to_string()),
                     )
+                    .with_checkbox(word_wrap_enabled)
                     .with_shortcut("Alt+W"),
                     MenuItem::new("Quit", MenuAction::Custom("quit".to_string()))
                         .with_shortcut("Ctrl+Q"),
@@ -337,22 +427,25 @@ impl MenuSystem {
         _is_markdown: bool,
         _in_preview_mode: bool,
         word_wrap_enabled: bool,
+        tree_view_enabled: bool,
+        find_inline_enabled: bool,
     ) {
-        let word_wrap_text = if word_wrap_enabled {
-            "Disable Word Wrap"
-        } else {
-            "Enable Word Wrap"
-        };
-
         let items = vec![
             MenuItem::new("Current Tab", MenuAction::Custom("current_tab".to_string()))
                 .with_shortcut("Ctrl+G"),
             MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                 .with_shortcut("Ctrl+P"),
+            MenuItem::new("Tree View", MenuAction::Custom("toggle_tree_view".to_string()))
+                .with_checkbox(tree_view_enabled)
+                .with_shortcut("Ctrl+T"),
+            MenuItem::new("Find Inline", MenuAction::Custom("toggle_find_inline".to_string()))
+                .with_checkbox(find_inline_enabled)
+                .with_shortcut("Ctrl+F"),
             MenuItem::new(
-                word_wrap_text,
+                "Word Wrap",
                 MenuAction::Custom("toggle_word_wrap".to_string()),
             )
+            .with_checkbox(word_wrap_enabled)
             .with_shortcut("Alt+W"),
             MenuItem::new("Quit", MenuAction::Custom("quit".to_string())).with_shortcut("Ctrl+Q"),
             MenuItem::new("Cancel", MenuAction::Close),
@@ -421,6 +514,7 @@ impl MenuSystem {
         path: PathBuf,
         is_directory: bool,
         position: (u16, u16),
+        has_clipboard: bool,
     ) {
         let mut items = Vec::new();
 
@@ -448,10 +542,15 @@ impl MenuSystem {
             MenuAction::Custom("copy".to_string()),
         ));
         items.push(MenuItem::new("Cut", MenuAction::Custom("cut".to_string())));
-        items.push(MenuItem::new(
-            "Paste",
-            MenuAction::Custom("paste".to_string()),
-        ));
+        
+        // Only show Paste if there's something in clipboard
+        if has_clipboard {
+            items.push(MenuItem::new(
+                "Paste",
+                MenuAction::Custom("paste".to_string()),
+            ));
+        }
+        
         items.push(MenuItem::new(
             "Rename",
             MenuAction::Custom("rename".to_string()),
@@ -467,6 +566,44 @@ impl MenuSystem {
             menu,
             target_path: path,
             is_directory,
+            position,
+        };
+
+        self.state = MenuState::TreeContextMenu(context_state);
+    }
+    
+    pub fn open_tree_empty_area_menu(
+        &mut self,
+        path: PathBuf,
+        position: (u16, u16),
+        has_clipboard: bool,
+    ) {
+        let mut items = Vec::new();
+
+        // Only show New File and New Folder for empty area
+        items.push(MenuItem::new(
+            "New File",
+            MenuAction::Custom("new_file".to_string()),
+        ));
+        items.push(MenuItem::new(
+            "New Folder",
+            MenuAction::Custom("new_folder".to_string()),
+        ));
+        
+        // Only show Paste if there's something in clipboard
+        if has_clipboard {
+            items.push(MenuItem::new(
+                "Paste",
+                MenuAction::Custom("paste".to_string()),
+            ));
+        }
+
+        let menu = MenuComponent::new(items);
+
+        let context_state = TreeContextMenuState {
+            menu,
+            target_path: path,
+            is_directory: true, // Empty area is treated as directory for operations
             position,
         };
 

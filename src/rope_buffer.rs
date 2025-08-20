@@ -45,6 +45,7 @@ impl RopeBuffer {
         self.rope.line_to_char(line_idx)
     }
 
+    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         self.rope.to_string()
     }
@@ -60,5 +61,26 @@ impl RopeBuffer {
 
     pub fn slice(&self, range: Range<usize>) -> ropey::RopeSlice<'_> {
         self.rope.slice(range)
+    }
+
+    pub fn replace_line(&mut self, line_idx: usize, new_text: &str) {
+        if line_idx >= self.len_lines() {
+            return;
+        }
+
+        let line_start = self.line_to_char(line_idx);
+        let line_end = if line_idx + 1 < self.len_lines() {
+            self.line_to_char(line_idx + 1) - 1 // Exclude the newline
+        } else {
+            self.len_chars()
+        };
+
+        // Remove the old line content
+        if line_end > line_start {
+            self.rope.remove(line_start..line_end);
+        }
+
+        // Insert the new line content
+        self.rope.insert(line_start, new_text);
     }
 }
