@@ -67,12 +67,11 @@ impl UI {
         // Split main content area into sidebar and editor if tree view exists
         let main_area = chunks[1];
         if let Some(tree_view) = tree_view {
-            // Create horizontal layout with tree view, border, and editor
+            // Create horizontal layout with tree view and editor
             let horizontal_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
                     Constraint::Length(sidebar_width), // Tree view sidebar
-                    Constraint::Length(1),             // Vertical border
                     Constraint::Min(0),                // Editor content
                 ])
                 .split(main_area);
@@ -80,18 +79,8 @@ impl UI {
             // Render tree view
             frame.render_widget(tree_view, horizontal_chunks[0]);
 
-            // Draw dimmed vertical border in the dedicated border area
-            let border_area = horizontal_chunks[1];
-            for y in border_area.y..border_area.y + border_area.height {
-                if border_area.x < size.width {
-                    frame.buffer_mut()[(border_area.x, y)]
-                        .set_symbol("│")
-                        .set_style(Style::default().fg(Color::DarkGray));
-                }
-            }
-
             // Render editor content in the remaining space
-            let editor_area = horizontal_chunks[2];
+            let editor_area = horizontal_chunks[1];
             if let Some(tab) = tab_manager.active_tab_mut() {
                 let is_editor_focused = matches!(focus_mode, FocusMode::Editor);
                 if tab.preview_mode && tab.is_markdown() {
