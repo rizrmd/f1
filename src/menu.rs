@@ -288,17 +288,13 @@ impl MenuSystem {
         }
     }
 
-    pub fn toggle_main_menu(&mut self, is_markdown: bool, in_preview_mode: bool) {
+    pub fn toggle_main_menu(&mut self, _is_markdown: bool, _in_preview_mode: bool, word_wrap_enabled: bool) {
         self.state = match self.state {
             MenuState::Closed => {
-                let preview_text = if is_markdown {
-                    if in_preview_mode {
-                        "Edit Mode"
-                    } else {
-                        "Preview Mode"
-                    }
+                let word_wrap_text = if word_wrap_enabled {
+                    "Disable Word Wrap"
                 } else {
-                    "Toggle Preview"
+                    "Enable Word Wrap"
                 };
                 
                 let items = vec![
@@ -306,12 +302,13 @@ impl MenuSystem {
                         .with_shortcut("Ctrl+G"),
                     MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                         .with_shortcut("Ctrl+P"),
-                    MenuItem::new(preview_text, MenuAction::Custom("toggle_preview".to_string()))
-                        .with_shortcut("Ctrl+U"),
+                    MenuItem::new(word_wrap_text, MenuAction::Custom("toggle_word_wrap".to_string()))
+                        .with_shortcut("Alt+W"),
                     MenuItem::new("Quit", MenuAction::Custom("quit".to_string()))
                         .with_shortcut("Ctrl+Q"),
                     MenuItem::new("Cancel", MenuAction::Close),
                 ];
+                
                 let menu = MenuComponent::new(items)
                     .with_width(30)
                     .with_colors(ratatui::style::Color::Yellow, ratatui::style::Color::Black);
@@ -322,15 +319,11 @@ impl MenuSystem {
     }
 
     #[allow(dead_code)]
-    pub fn open_main_menu(&mut self, is_markdown: bool, in_preview_mode: bool) {
-        let preview_text = if is_markdown {
-            if in_preview_mode {
-                "Edit Mode"
-            } else {
-                "Preview Mode"
-            }
+    pub fn open_main_menu(&mut self, _is_markdown: bool, _in_preview_mode: bool, word_wrap_enabled: bool) {
+        let word_wrap_text = if word_wrap_enabled {
+            "Disable Word Wrap"
         } else {
-            "Toggle Preview"
+            "Enable Word Wrap"
         };
         
         let items = vec![
@@ -338,12 +331,13 @@ impl MenuSystem {
                 .with_shortcut("Ctrl+G"),
             MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                 .with_shortcut("Ctrl+P"),
-            MenuItem::new(preview_text, MenuAction::Custom("toggle_preview".to_string()))
-                .with_shortcut("Ctrl+U"),
+            MenuItem::new(word_wrap_text, MenuAction::Custom("toggle_word_wrap".to_string()))
+                .with_shortcut("Alt+W"),
             MenuItem::new("Quit", MenuAction::Custom("quit".to_string()))
                 .with_shortcut("Ctrl+Q"),
             MenuItem::new("Cancel", MenuAction::Close),
         ];
+        
         let menu = MenuComponent::new(items)
             .with_width(30)
             .with_colors(ratatui::style::Color::Yellow, ratatui::style::Color::Black);
@@ -352,6 +346,10 @@ impl MenuSystem {
 
     pub fn open_current_tab_menu(&mut self) {
         let items = vec![
+            MenuItem::new("Next Tab", MenuAction::Custom("next_tab".to_string()))
+                .with_shortcut("Ctrl+]"),
+            MenuItem::new("Previous Tab", MenuAction::Custom("prev_tab".to_string()))
+                .with_shortcut("Ctrl+["),
             MenuItem::new("Close Tab", MenuAction::Custom("close_tab".to_string()))
                 .with_shortcut("Ctrl+W"),
             MenuItem::new("Close Other Tab", MenuAction::Custom("close_other_tab".to_string()))

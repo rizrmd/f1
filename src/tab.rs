@@ -16,6 +16,7 @@ pub struct Tab {
     pub viewport_offset: (usize, usize),
     pub modified: bool,
     pub preview_mode: bool,
+    pub word_wrap: bool,
     undo_stack: Vec<EditorState>,
     redo_stack: Vec<EditorState>,
     max_undo_history: usize,
@@ -31,6 +32,7 @@ impl Tab {
             viewport_offset: (0, 0),
             modified: false,
             preview_mode: false,
+            word_wrap: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             max_undo_history: 100,
@@ -59,6 +61,7 @@ impl Tab {
             viewport_offset: (0, 0),
             modified: false,
             preview_mode: is_markdown, // Default to preview mode for markdown files
+            word_wrap: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             max_undo_history: 100,
@@ -66,10 +69,7 @@ impl Tab {
     }
 
     pub fn display_name(&self) -> String {
-        let mut name = self.name.clone();
-        if self.preview_mode {
-            name = format!("[Preview] {}", name);
-        }
+        let name = self.name.clone();
         if self.modified {
             format!("{}*", name)
         } else {
@@ -116,6 +116,10 @@ impl Tab {
         if self.is_markdown() {
             self.preview_mode = !self.preview_mode;
         }
+    }
+    
+    pub fn toggle_word_wrap(&mut self) {
+        self.word_wrap = !self.word_wrap;
     }
     
     pub fn is_markdown(&self) -> bool {

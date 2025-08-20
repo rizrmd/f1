@@ -129,12 +129,12 @@ impl App {
                 }
             }
             EditorCommand::ToggleMenu => {
-                let (is_markdown, in_preview_mode) = if let Some(tab) = self.tab_manager.active_tab() {
-                    (tab.is_markdown(), tab.preview_mode)
+                let (is_markdown, in_preview_mode, word_wrap_enabled) = if let Some(tab) = self.tab_manager.active_tab() {
+                    (tab.is_markdown(), tab.preview_mode, tab.word_wrap)
                 } else {
-                    (false, false)
+                    (false, false, true)
                 };
-                self.menu_system.toggle_main_menu(is_markdown, in_preview_mode);
+                self.menu_system.toggle_main_menu(is_markdown, in_preview_mode, word_wrap_enabled);
             }
             EditorCommand::OpenFile => {
                 // Get the current tab's file path to open picker in that directory
@@ -158,6 +158,11 @@ impl App {
             EditorCommand::TogglePreview => {
                 if let Some(tab) = self.tab_manager.active_tab_mut() {
                     tab.toggle_preview_mode();
+                }
+            }
+            EditorCommand::ToggleWordWrap => {
+                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                    tab.toggle_word_wrap();
                 }
             }
             EditorCommand::FocusTreeView => {
@@ -253,6 +258,12 @@ impl App {
                                     .and_then(|tab| tab.path.clone());
                                 self.menu_system.open_file_picker_at_path(current_path);
                             }
+                            "next_tab" => {
+                                self.tab_manager.next_tab();
+                            }
+                            "prev_tab" => {
+                                self.tab_manager.prev_tab();
+                            }
                             "close_tab" => {
                                 self.handle_close_tab();
                             }
@@ -262,6 +273,11 @@ impl App {
                             "toggle_preview" => {
                                 if let Some(tab) = self.tab_manager.active_tab_mut() {
                                     tab.toggle_preview_mode();
+                                }
+                            }
+                            "toggle_word_wrap" => {
+                                if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                    tab.toggle_word_wrap();
                                 }
                             }
                             "quit" => {
@@ -415,6 +431,23 @@ impl App {
         if self.focus_mode == FocusMode::TreeView {
             if let Some(tree_view) = &mut self.tree_view {
                 match (key.code, key.modifiers) {
+                    // Tab navigation commands work regardless of focus
+                    (KeyCode::Char(']'), KeyModifiers::CONTROL) => {
+                        self.handle_command(EditorCommand::NextTab);
+                        return;
+                    }
+                    (KeyCode::Char('['), KeyModifiers::CONTROL) => {
+                        self.handle_command(EditorCommand::PrevTab);
+                        return;
+                    }
+                    (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                        self.handle_command(EditorCommand::CloseTab);
+                        return;
+                    }
+                    (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+                        self.handle_command(EditorCommand::CurrentTab);
+                        return;
+                    }
                     // Tab to switch focus back to editor
                     (KeyCode::Tab, KeyModifiers::NONE) => {
                         self.handle_command(EditorCommand::FocusEditor);
@@ -677,6 +710,8 @@ impl App {
                     (KeyCode::Tab, KeyModifiers::CONTROL) |        // Next tab
                     (KeyCode::BackTab, KeyModifiers::NONE) |       // Previous tab
                     (KeyCode::Char('g'), KeyModifiers::CONTROL) |  // Current tab menu
+                    (KeyCode::F(1), KeyModifiers::NONE) |          // F1 menu
+                    (KeyCode::Char('w'), KeyModifiers::ALT) |      // Word wrap toggle
                     (KeyCode::Esc, KeyModifiers::NONE) => {        // Escape
                         // Let these commands pass through to normal handling
                     }
@@ -1113,6 +1148,14 @@ impl App {
                     }
                 }
                 
+                // Switch focus to editor if we were in tree view
+                if self.focus_mode == FocusMode::TreeView {
+                    self.focus_mode = FocusMode::Editor;
+                    if let Some(tree_view) = &mut self.tree_view {
+                        tree_view.is_focused = false;
+                    }
+                }
+                
                 // Convert mouse coordinates to text position
                 if let Some(pos) = self.mouse_to_text_position(mouse.column, mouse.row, active_index) {
                     if let Some(tab) = self.tab_manager.active_tab_mut() {
@@ -1208,6 +1251,20 @@ impl App {
         let editor_y = mouse_y - editor_start_y;
         let editor_line = editor_y as usize + tab.viewport_offset.0;
         
+        // Account for sidebar and border if tree view is present
+        let sidebar_offset = if self.tree_view.is_some() {
+            self.sidebar_width + 1 // sidebar width + 1 for the border
+        } else {
+            0
+        };
+        
+        // Check if click is in sidebar area
+        if mouse_x < sidebar_offset {
+            return None; // Click is in sidebar/border area
+        }
+        
+        let adjusted_mouse_x = mouse_x - sidebar_offset;
+        
         // Calculate line number width
         let max_line = tab.buffer.len_lines();
         let line_number_width = if max_line > 0 {
@@ -1217,11 +1274,11 @@ impl App {
         };
         
         // Account for line numbers
-        if mouse_x < line_number_width as u16 {
+        if adjusted_mouse_x < line_number_width as u16 {
             return None; // Click is in line number area
         }
         
-        let editor_x = mouse_x - line_number_width as u16;
+        let editor_x = adjusted_mouse_x - line_number_width as u16;
         
         // Ensure we don't go beyond the buffer
         if editor_line >= tab.buffer.len_lines() {
@@ -1430,12 +1487,20 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 // Check if click is on F1 menu button in status bar
                 if self.is_f1_button_clicked(mouse.column, mouse.row) {
-                    let (is_markdown, in_preview_mode) = if let Some(tab) = self.tab_manager.active_tab() {
-                        (tab.is_markdown(), tab.preview_mode)
+                    let (is_markdown, in_preview_mode, word_wrap_enabled) = if let Some(tab) = self.tab_manager.active_tab() {
+                        (tab.is_markdown(), tab.preview_mode, tab.word_wrap)
                     } else {
-                        (false, false)
+                        (false, false, true)
                     };
-                    self.menu_system.toggle_main_menu(is_markdown, in_preview_mode);
+                    self.menu_system.toggle_main_menu(is_markdown, in_preview_mode, word_wrap_enabled);
+                    return true;
+                }
+
+                // Check if click is on PREVIEW/EDIT button in status bar
+                if self.is_preview_edit_button_clicked(mouse.column, mouse.row) {
+                    if let Some(tab) = self.tab_manager.active_tab_mut() {
+                        tab.toggle_preview_mode();
+                    }
                     return true;
                 }
 
@@ -1465,6 +1530,11 @@ impl App {
                                                 tab.toggle_preview_mode();
                                             }
                                         }
+                                        "toggle_word_wrap" => {
+                                            if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                                tab.toggle_word_wrap();
+                                            }
+                                        }
                                         "quit" => self.handle_quit(),
                                         _ => {}
                                     }
@@ -1488,6 +1558,8 @@ impl App {
                                 menu.selected_index = item_index;
                                 if let Some(action) = self.menu_system.handle_enter() {
                                     match action.as_str() {
+                                        "next_tab" => self.tab_manager.next_tab(),
+                                        "prev_tab" => self.tab_manager.prev_tab(),
                                         "close_tab" => self.handle_close_tab(),
                                         "close_other_tab" => {
                                             self.tab_manager.close_other_tabs();
@@ -1601,6 +1673,22 @@ impl App {
 
         // F1 button is at the leftmost position of status bar, 6 characters wide
         mouse_x < 6
+    }
+
+    fn is_preview_edit_button_clicked(&self, mouse_x: u16, mouse_y: u16) -> bool {
+        let status_row = self.terminal_size.1.saturating_sub(1);
+        if mouse_y != status_row {
+            return false;
+        }
+
+        // Check if we're viewing a markdown file
+        if let Some(tab) = self.tab_manager.active_tab() {
+            if tab.is_markdown() {
+                // Button is right after F1 button (6 chars) and is 18 characters wide (" PREVIEW (Ctrl+U) " is 18 chars, " EDIT (Ctrl+U) " is 15 chars)
+                return mouse_x >= 6 && mouse_x < 24;
+            }
+        }
+        false
     }
 
     fn get_clicked_tab(&self, mouse_x: u16) -> Option<usize> {
@@ -2191,7 +2279,7 @@ impl App {
         if let crate::menu::MenuState::InputDialog(input_state) = &mut self.menu_system.state {
             match (key.code, key.modifiers) {
                 // Character input
-                (KeyCode::Char(c), KeyModifiers::NONE) => {
+                (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
                     // Delete selection if any
                     if input_state.selection_start.is_some() {
                         Self::delete_input_selection(input_state);
@@ -2561,9 +2649,24 @@ impl App {
                                 .map_err(|e| format!("Failed to create directory: {}", e))
                         }
                         "rename" => {
-                            tree_view.rename_file_or_directory(target_path, input.trim())
-                                .map(|_| format!("Renamed to '{}'", input.trim()))
-                                .map_err(|e| format!("Failed to rename: {}", e))
+                            match tree_view.rename_file_or_directory(target_path, input.trim()) {
+                                Ok(new_path) => {
+                                    // Update any open tabs with the renamed file
+                                    for tab in self.tab_manager.tabs.iter_mut() {
+                                        if let Some(tab_path) = &tab.path {
+                                            if tab_path == target_path {
+                                                // Update tab path and name
+                                                tab.path = Some(new_path.clone());
+                                                if let Some(file_name) = new_path.file_name() {
+                                                    tab.name = file_name.to_string_lossy().to_string();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Ok(format!("Renamed to '{}'", input.trim()))
+                                }
+                                Err(e) => Err(format!("Failed to rename: {}", e))
+                            }
                         }
                         _ => return,
                     };
@@ -2740,7 +2843,9 @@ impl App {
                     }
                     
                     // Calculate which item was clicked first
-                    let item_y = mouse.row - tree_area_start_y;
+                    // Account for search box if searching (takes up 1 line at top)
+                    let search_offset = if tree_view.is_searching { 1 } else { 0 };
+                    let item_y = (mouse.row - tree_area_start_y).saturating_sub(search_offset);
                     let visible_items = tree_view.get_visible_items();
                     let clicked_index = tree_view.scroll_offset + item_y as usize;
                     
@@ -2785,7 +2890,9 @@ impl App {
             MouseEventKind::Down(MouseButton::Right) => {
                 if let Some(tree_view) = &mut self.tree_view {
                     // Calculate which item was right-clicked
-                    let item_y = mouse.row - tree_area_start_y;
+                    // Account for search box if searching (takes up 1 line at top)
+                    let search_offset = if tree_view.is_searching { 1 } else { 0 };
+                    let item_y = (mouse.row - tree_area_start_y).saturating_sub(search_offset);
                     let visible_items = tree_view.get_visible_items();
                     let clicked_index = tree_view.scroll_offset + item_y as usize;
                     

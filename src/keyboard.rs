@@ -36,11 +36,11 @@ pub fn handle_key_event(
         // Close Tab - Ctrl+W
         KeyCode::Char('w') if has_ctrl => Some(EditorCommand::CloseTab),
         
-        // Next Tab - Ctrl+Tab
-        KeyCode::Tab if has_ctrl => Some(EditorCommand::NextTab),
+        // Next Tab - Ctrl+]
+        KeyCode::Char(']') if has_ctrl => Some(EditorCommand::NextTab),
         
-        // Previous Tab - Shift+Tab
-        KeyCode::BackTab => Some(EditorCommand::PrevTab),
+        // Previous Tab - Ctrl+[
+        KeyCode::Char('[') if has_ctrl => Some(EditorCommand::PrevTab),
         
         // Select all - Ctrl+A
         KeyCode::Char('a') if has_ctrl => {
@@ -78,6 +78,9 @@ pub fn handle_key_event(
         
         // Toggle Preview - Ctrl+U (for markdown files)
         KeyCode::Char('u') if has_ctrl => Some(EditorCommand::TogglePreview),
+        
+        // Toggle Word Wrap - Alt+W
+        KeyCode::Char('w') if has_alt => Some(EditorCommand::ToggleWordWrap),
         
         // Menu - F1
         KeyCode::F(1) => Some(EditorCommand::ToggleMenu),
@@ -383,6 +386,7 @@ pub enum EditorCommand {
     Undo,
     Redo,
     TogglePreview,
+    ToggleWordWrap,
     FocusTreeView,
     FocusEditor,
 }

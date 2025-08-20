@@ -92,7 +92,8 @@ impl UI {
                     let editor = EditorWidget::new(&tab.buffer, &tab.cursor)
                         .viewport_offset(tab.viewport_offset)
                         .show_line_numbers(true)
-                        .focused(is_editor_focused);
+                        .focused(is_editor_focused)
+                        .word_wrap(tab.word_wrap);
                     frame.render_widget(editor, editor_area);
                 }
             }
@@ -110,7 +111,8 @@ impl UI {
                     let editor = EditorWidget::new(&tab.buffer, &tab.cursor)
                         .viewport_offset(tab.viewport_offset)
                         .show_line_numbers(true)
-                        .focused(true);
+                        .focused(true)
+                        .word_wrap(tab.word_wrap);
                     frame.render_widget(editor, main_area);
                 }
             }
