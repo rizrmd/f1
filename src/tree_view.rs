@@ -824,6 +824,19 @@ impl TreeView {
             .iter()
             .position(|item| item.path == target_path)
     }
+
+    // Add missing methods needed by keyboard handlers
+    pub fn toggle_directory(&mut self) -> Result<(), std::io::Error> {
+        self.toggle_selected()
+    }
+
+    pub fn move_up(&mut self) {
+        self.move_selection_up();
+    }
+
+    pub fn move_down(&mut self) {
+        self.move_selection_down();
+    }
 }
 
 impl Widget for &TreeView {

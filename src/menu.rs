@@ -349,6 +349,82 @@ impl FilePickerState {
 
         self.last_scroll_time = Some(now);
     }
+
+    // Add missing methods needed by file picker handler
+    pub fn move_up(&mut self) {
+        self.move_selection_up();
+    }
+
+    pub fn move_down(&mut self) {
+        self.move_selection_down();
+    }
+
+    pub fn move_left(&mut self) {
+        // Go up one directory level
+        self.go_up();
+    }
+
+    pub fn move_right(&mut self) {
+        // If selected item is a directory, enter it
+        if let Some(item) = self.get_selected_item() {
+            if item.is_dir && item.name != ".." {
+                let dir = item.path.clone();
+                self.enter_directory(dir);
+            }
+        }
+    }
+
+    pub fn select(&mut self) -> Option<PathBuf> {
+        if let Some(item) = self.get_selected_item() {
+            if item.is_dir {
+                if item.name == ".." {
+                    self.go_up();
+                    None
+                } else {
+                    let dir = item.path.clone();
+                    self.enter_directory(dir);
+                    None
+                }
+            } else {
+                Some(item.path.clone())
+            }
+        } else {
+            None
+        }
+    }
+
+    // Add missing methods for file picker navigation
+    pub fn page_up(&mut self) {
+        let page_size = 10; // Move up by 10 items
+        for _ in 0..page_size {
+            if self.selected_index == 0 {
+                break;
+            }
+            self.move_selection_up();
+        }
+    }
+
+    pub fn page_down(&mut self) {
+        let page_size = 10; // Move down by 10 items
+        for _ in 0..page_size {
+            if self.selected_index >= self.filtered_items.len().saturating_sub(1) {
+                break;
+            }
+            self.move_selection_down();
+        }
+    }
+
+    pub fn move_to_start(&mut self) {
+        self.selected_index = 0;
+        self.hovered_index = None;
+    }
+
+    pub fn move_to_end(&mut self) {
+        if !self.filtered_items.is_empty() {
+            self.selected_index = self.filtered_items.len() - 1;
+            self.hovered_index = None;
+        }
+    }
 }
 
 fn fuzzy_match(text: &str, pattern: &str) -> bool {
@@ -715,6 +791,30 @@ impl MenuSystem {
                 }
             }
             _ => None,
+        }
+    }
+
+    // Add missing method needed by keyboard handler
+    pub fn toggle_help(&mut self) {
+        // For now, this just opens/closes the help menu
+        // In a full implementation, this would show a help dialog
+        match self.state {
+            MenuState::Closed => {
+                // Open a help menu
+                let items = vec![
+                    MenuItem::new("Keyboard Shortcuts", MenuAction::Custom("show_shortcuts".to_string())),
+                    MenuItem::new("About", MenuAction::Custom("show_about".to_string())),
+                    MenuItem::new("Close", MenuAction::Close),
+                ];
+                let menu = MenuComponent::new(items)
+                    .with_width(25)
+                    .with_colors(ratatui::style::Color::Green, ratatui::style::Color::Black);
+                self.state = MenuState::MainMenu(menu);
+            }
+            _ => {
+                // Close any open menu
+                self.close();
+            }
         }
     }
 }

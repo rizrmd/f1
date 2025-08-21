@@ -8,8 +8,15 @@ mod markdown_widget;
 mod menu;
 mod rope_buffer;
 mod tab;
+mod tab_operations;
+mod file_operations;
+mod terminal_widget;
 mod tree_view;
 mod ui;
+
+// New modular structure
+mod interactions;
+mod handlers;
 
 use std::io::{self, stdout};
 

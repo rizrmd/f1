@@ -15,7 +15,7 @@ use crate::app::FocusMode;
 use crate::editor_widget::EditorWidget;
 use crate::file_icons;
 use crate::menu::{MenuState, MenuSystem};
-use crate::tab::TabManager;
+use crate::tab::{Tab, TabManager};
 use crate::tree_view::TreeView;
 
 pub use self::menu_component::{MenuAction, MenuComponent, MenuItem};
@@ -85,96 +85,112 @@ impl UI {
             // Render editor content in the remaining space
             let editor_area = horizontal_chunks[1];
             if let Some(tab) = tab_manager.active_tab_mut() {
-                // Check if we need to show find/replace bar in editor area
-                let final_editor_area = if tab.find_replace_state.active {
-                    let bar_height = if tab.find_replace_state.is_replace_mode {
-                        2
-                    } else {
-                        1
-                    };
-                    let split = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(bar_height), Constraint::Min(0)])
-                        .split(editor_area);
+                let is_markdown = tab.is_markdown();
+                match tab {
+                    Tab::Editor { find_replace_state, preview_mode, buffer, cursor, viewport_offset, word_wrap, .. } => {
+                        // Check if we need to show find/replace bar in editor area
+                        let final_editor_area = if find_replace_state.active {
+                            let bar_height = if find_replace_state.is_replace_mode {
+                                2
+                            } else {
+                                1
+                            };
+                            let split = Layout::default()
+                                .direction(Direction::Vertical)
+                                .constraints([Constraint::Length(bar_height), Constraint::Min(0)])
+                                .split(editor_area);
 
-                    // Draw find/replace bar at top of editor
-                    self.draw_find_replace_bar(frame, split[0], &tab.find_replace_state);
-                    split[1]
-                } else {
-                    editor_area
-                };
+                            // Draw find/replace bar at top of editor
+                            self.draw_find_replace_bar(frame, split[0], find_replace_state);
+                            split[1]
+                        } else {
+                            editor_area
+                        };
 
-                let is_editor_focused = matches!(focus_mode, FocusMode::Editor);
-                if tab.preview_mode && tab.is_markdown() {
-                    // Render markdown preview
-                    let content = tab.buffer.to_string();
-                    let preview = crate::markdown_widget::MarkdownWidget::new(&content)
-                        .viewport_offset(tab.viewport_offset);
-                    frame.render_widget(preview, final_editor_area);
-                } else {
-                    // Render normal editor
-                    let mut editor = EditorWidget::new(&tab.buffer, &tab.cursor)
-                        .viewport_offset(tab.viewport_offset)
-                        .show_line_numbers(true)
-                        .focused(is_editor_focused)
-                        .word_wrap(tab.word_wrap);
+                        let is_editor_focused = matches!(focus_mode, FocusMode::Editor);
+                        if *preview_mode && is_markdown {
+                            // Render markdown preview
+                            let content = buffer.to_string();
+                            let preview = crate::markdown_widget::MarkdownWidget::new(&content)
+                                .viewport_offset(*viewport_offset);
+                            frame.render_widget(preview, final_editor_area);
+                        } else {
+                            // Render normal editor
+                            let mut editor = EditorWidget::new(buffer, cursor)
+                                .viewport_offset(*viewport_offset)
+                                .show_line_numbers(true)
+                                .focused(is_editor_focused)
+                                .word_wrap(*word_wrap);
 
-                    // Add find matches if search is active
-                    if tab.find_replace_state.active && !tab.find_replace_state.matches.is_empty() {
-                        editor = editor.find_matches(
-                            &tab.find_replace_state.matches,
-                            tab.find_replace_state.current_match_index,
-                        );
+                            // Add find matches if search is active
+                            if find_replace_state.active && !find_replace_state.matches.is_empty() {
+                                editor = editor.find_matches(
+                                    &find_replace_state.matches,
+                                    find_replace_state.current_match_index,
+                                );
+                            }
+
+                            frame.render_widget(editor, final_editor_area);
+                        }
                     }
-
-                    frame.render_widget(editor, final_editor_area);
+                    Tab::Terminal { terminal, .. } => {
+                        frame.render_widget(terminal, editor_area);
+                    }
                 }
             }
         } else {
             // No tree view, render editor in full main area
             if let Some(tab) = tab_manager.active_tab_mut() {
-                // Check if we need to show find/replace bar
-                let final_editor_area = if tab.find_replace_state.active {
-                    let bar_height = if tab.find_replace_state.is_replace_mode {
-                        2
-                    } else {
-                        1
-                    };
-                    let split = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(bar_height), Constraint::Min(0)])
-                        .split(main_area);
+                let is_markdown = tab.is_markdown();
+                match tab {
+                    Tab::Editor { find_replace_state, preview_mode, buffer, cursor, viewport_offset, word_wrap, .. } => {
+                        // Check if we need to show find/replace bar
+                        let final_editor_area = if find_replace_state.active {
+                            let bar_height = if find_replace_state.is_replace_mode {
+                                2
+                            } else {
+                                1
+                            };
+                            let split = Layout::default()
+                                .direction(Direction::Vertical)
+                                .constraints([Constraint::Length(bar_height), Constraint::Min(0)])
+                                .split(main_area);
 
-                    // Draw find/replace bar at top of editor
-                    self.draw_find_replace_bar(frame, split[0], &tab.find_replace_state);
-                    split[1]
-                } else {
-                    main_area
-                };
+                            // Draw find/replace bar at top of editor
+                            self.draw_find_replace_bar(frame, split[0], find_replace_state);
+                            split[1]
+                        } else {
+                            main_area
+                        };
 
-                if tab.preview_mode && tab.is_markdown() {
-                    // Render markdown preview
-                    let content = tab.buffer.to_string();
-                    let preview = crate::markdown_widget::MarkdownWidget::new(&content)
-                        .viewport_offset(tab.viewport_offset);
-                    frame.render_widget(preview, final_editor_area);
-                } else {
-                    // Render normal editor
-                    let mut editor = EditorWidget::new(&tab.buffer, &tab.cursor)
-                        .viewport_offset(tab.viewport_offset)
-                        .show_line_numbers(true)
-                        .focused(true)
-                        .word_wrap(tab.word_wrap);
+                        if *preview_mode && is_markdown {
+                            // Render markdown preview
+                            let content = buffer.to_string();
+                            let preview = crate::markdown_widget::MarkdownWidget::new(&content)
+                                .viewport_offset(*viewport_offset);
+                            frame.render_widget(preview, final_editor_area);
+                        } else {
+                            // Render normal editor
+                            let mut editor = EditorWidget::new(buffer, cursor)
+                                .viewport_offset(*viewport_offset)
+                                .show_line_numbers(true)
+                                .focused(true)
+                                .word_wrap(*word_wrap);
 
-                    // Add find matches if search is active
-                    if tab.find_replace_state.active && !tab.find_replace_state.matches.is_empty() {
-                        editor = editor.find_matches(
-                            &tab.find_replace_state.matches,
-                            tab.find_replace_state.current_match_index,
-                        );
+                            // Add find matches if search is active
+                            if find_replace_state.active && !find_replace_state.matches.is_empty() {
+                                editor = editor.find_matches(
+                                    &find_replace_state.matches,
+                                    find_replace_state.current_match_index,
+                                );
+                            }
+
+                            frame.render_widget(editor, final_editor_area);
+                        }
                     }
-
-                    frame.render_widget(editor, final_editor_area);
+                    Tab::Terminal { terminal, .. } => {
+                        frame.render_widget(terminal, main_area);
+                    }
                 }
             }
         }

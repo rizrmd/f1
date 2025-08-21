@@ -83,4 +83,18 @@ impl RopeBuffer {
         // Insert the new line content
         self.rope.insert(line_start, new_text);
     }
+
+    pub fn delete_char(&mut self, char_idx: usize) {
+        if char_idx < self.len_chars() {
+            self.remove(char_idx..char_idx + 1);
+        }
+    }
+
+    pub fn delete_range(&mut self, range: Range<usize>) {
+        self.remove(range);
+    }
+
+    pub fn get_line(&self, line_idx: usize) -> String {
+        self.get_line_text(line_idx)
+    }
 }

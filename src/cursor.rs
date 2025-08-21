@@ -338,6 +338,44 @@ impl Cursor {
         self.selection_start = Some(Position::new(self.position.line, start_col));
         self.position = Position::new(self.position.line, end_col);
     }
+
+    // Add missing methods needed by mouse and keyboard handlers
+    pub fn move_to(&mut self, line: usize, col: usize) {
+        self.position.line = line;
+        self.position.column = col;
+        self.desired_column = None;
+    }
+
+    pub fn select_word(&mut self, buffer: &RopeBuffer) {
+        self.select_word_at_position(buffer);
+    }
+
+    pub fn extend_selection_to(&mut self, line: usize, col: usize) {
+        if self.selection_start.is_none() {
+            self.start_selection();
+        }
+        self.position = Position::new(line, col);
+    }
+
+    pub fn page_up(&mut self, buffer: &RopeBuffer, visible_height: usize) {
+        let lines_to_move = visible_height.saturating_sub(1);
+        for _ in 0..lines_to_move {
+            if self.position.line == 0 {
+                break;
+            }
+            self.move_up(buffer);
+        }
+    }
+
+    pub fn page_down(&mut self, buffer: &RopeBuffer, visible_height: usize) {
+        let lines_to_move = visible_height.saturating_sub(1);
+        for _ in 0..lines_to_move {
+            if self.position.line >= buffer.len_lines().saturating_sub(1) {
+                break;
+            }
+            self.move_down(buffer);
+        }
+    }
 }
 
 fn is_word_char(ch: char) -> bool {

@@ -44,6 +44,9 @@ pub fn handle_key_event(
 
         // New Tab - Ctrl+N
         KeyCode::Char('n') if has_ctrl => Some(EditorCommand::NewTab),
+        
+        // New terminal - Ctrl+T
+        KeyCode::Char('t') if has_ctrl => Some(EditorCommand::NewTerminal),
 
         // Close Tab - Ctrl+W
         KeyCode::Char('w') if has_ctrl => Some(EditorCommand::CloseTab),
@@ -499,6 +502,7 @@ pub enum EditorCommand {
     Quit,
     Save,
     NewTab,
+    NewTerminal,
     CloseTab,
     NextTab,
     PrevTab,
