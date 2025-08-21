@@ -1548,21 +1548,19 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 // Check if this was a click on active tab (no drag occurred)
-                if self.dragging_tab.is_some() {
-                    if mouse.row == 0 {
-                        // Check if mouse hasn't moved much (it's a click, not a drag)
-                        if mouse.column.abs_diff(self.drag_start_x) <= 2 {
-                            // Only toggle menu if the tab was already active when we clicked it
-                            if self.tab_was_active_on_click {
-                                // Toggle current tab menu
-                                if matches!(
-                                    self.menu_system.state,
-                                    crate::menu::MenuState::CurrentTabMenu(_)
-                                ) {
-                                    self.menu_system.close();
-                                } else {
-                                    self.menu_system.open_current_tab_menu();
-                                }
+                if self.dragging_tab.is_some() && mouse.row == 0 {
+                    // Check if mouse hasn't moved much (it's a click, not a drag)
+                    if mouse.column.abs_diff(self.drag_start_x) <= 2 {
+                        // Only toggle menu if the tab was already active when we clicked it
+                        if self.tab_was_active_on_click {
+                            // Toggle current tab menu
+                            if matches!(
+                                self.menu_system.state,
+                                crate::menu::MenuState::CurrentTabMenu(_)
+                            ) {
+                                self.menu_system.close();
+                            } else {
+                                self.menu_system.open_current_tab_menu();
                             }
                         }
                     }
@@ -4133,109 +4131,106 @@ impl App {
         let word_btn_start = case_btn_start + case_btn_width;
         let word_btn_width = 5;
 
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                if mouse.row == bar_start_y {
-                    // Find row
-                    // Debug: Log click position and button boundaries
-                    eprintln!(
-                        "Click at column {}, Find Next: {}-{}, Case: {}-{}, Word: {}-{}",
-                        relative_column,
-                        find_next_start,
-                        find_next_start + find_next_width,
-                        case_btn_start,
-                        case_btn_start + case_btn_width,
-                        word_btn_start,
-                        word_btn_start + word_btn_width
-                    );
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+            if mouse.row == bar_start_y {
+                // Find row
+                // Debug: Log click position and button boundaries
+                eprintln!(
+                    "Click at column {}, Find Next: {}-{}, Case: {}-{}, Word: {}-{}",
+                    relative_column,
+                    find_next_start,
+                    find_next_start + find_next_width,
+                    case_btn_start,
+                    case_btn_start + case_btn_width,
+                    word_btn_start,
+                    word_btn_start + word_btn_width
+                );
 
-                    if relative_column >= find_input_start && relative_column < find_input_end {
-                        // Click on find input field
-                        if let Some(tab) = self.tab_manager.active_tab_mut() {
-                            tab.find_replace_state.focused_field = FindFocusedField::Find;
-                            // Set cursor position based on click
-                            let text_pos = relative_column - find_input_start;
-                            if text_pos <= tab.find_replace_state.find_query.len() {
-                                tab.find_replace_state.find_cursor_position = text_pos;
-                            }
+                if relative_column >= find_input_start && relative_column < find_input_end {
+                    // Click on find input field
+                    if let Some(tab) = self.tab_manager.active_tab_mut() {
+                        tab.find_replace_state.focused_field = FindFocusedField::Find;
+                        // Set cursor position based on click
+                        let text_pos = relative_column - find_input_start;
+                        if text_pos <= tab.find_replace_state.find_query.len() {
+                            tab.find_replace_state.find_cursor_position = text_pos;
                         }
-                        return true;
-                    } else if relative_column >= find_next_start
-                        && relative_column < find_next_start + find_next_width
-                    {
-                        // Click on Find Next button
-                        if let Some(tab) = self.tab_manager.active_tab_mut() {
-                            tab.find_next();
-                        }
-                        return true;
-                    } else if relative_column >= case_btn_start
-                        && relative_column < case_btn_start + case_btn_width
-                    {
-                        // Toggle case sensitive
-                        if let Some(tab) = self.tab_manager.active_tab_mut() {
-                            tab.find_replace_state.case_sensitive =
-                                !tab.find_replace_state.case_sensitive;
-                            tab.perform_find();
-                        }
-                        return true;
-                    } else if relative_column >= word_btn_start
-                        && relative_column < word_btn_start + word_btn_width
-                    {
-                        // Toggle whole word
-                        if let Some(tab) = self.tab_manager.active_tab_mut() {
-                            tab.find_replace_state.whole_word = !tab.find_replace_state.whole_word;
-                            tab.perform_find();
-                        }
-                        return true;
                     }
-                } else if mouse.row == bar_start_y + 1 {
-                    // Replace row (if visible)
-                    if let Some(tab) = self.tab_manager.active_tab() {
-                        if tab.find_replace_state.is_replace_mode {
-                            // Similar layout for replace row
-                            let replace_input_start = find_label_width; // Same as find input
-                            let replace_input_end = find_input_end;
-                            let replace_btn_start = match_counter_start + match_counter_width;
-                            let replace_btn_width = 12;
-                            let replace_all_start = replace_btn_start + replace_btn_width;
-                            let replace_all_width = 10; // Spans positions 4 and 5 (5+5)
+                    return true;
+                } else if relative_column >= find_next_start
+                    && relative_column < find_next_start + find_next_width
+                {
+                    // Click on Find Next button
+                    if let Some(tab) = self.tab_manager.active_tab_mut() {
+                        tab.find_next();
+                    }
+                    return true;
+                } else if relative_column >= case_btn_start
+                    && relative_column < case_btn_start + case_btn_width
+                {
+                    // Toggle case sensitive
+                    if let Some(tab) = self.tab_manager.active_tab_mut() {
+                        tab.find_replace_state.case_sensitive =
+                            !tab.find_replace_state.case_sensitive;
+                        tab.perform_find();
+                    }
+                    return true;
+                } else if relative_column >= word_btn_start
+                    && relative_column < word_btn_start + word_btn_width
+                {
+                    // Toggle whole word
+                    if let Some(tab) = self.tab_manager.active_tab_mut() {
+                        tab.find_replace_state.whole_word = !tab.find_replace_state.whole_word;
+                        tab.perform_find();
+                    }
+                    return true;
+                }
+            } else if mouse.row == bar_start_y + 1 {
+                // Replace row (if visible)
+                if let Some(tab) = self.tab_manager.active_tab() {
+                    if tab.find_replace_state.is_replace_mode {
+                        // Similar layout for replace row
+                        let replace_input_start = find_label_width; // Same as find input
+                        let replace_input_end = find_input_end;
+                        let replace_btn_start = match_counter_start + match_counter_width;
+                        let replace_btn_width = 12;
+                        let replace_all_start = replace_btn_start + replace_btn_width;
+                        let replace_all_width = 10; // Spans positions 4 and 5 (5+5)
 
-                            if relative_column >= replace_input_start
-                                && relative_column < replace_input_end
-                            {
-                                // Click on replace input field
-                                if let Some(tab) = self.tab_manager.active_tab_mut() {
-                                    tab.find_replace_state.focused_field =
-                                        FindFocusedField::Replace;
-                                    // Set cursor position based on click
-                                    let text_pos = relative_column - replace_input_start;
-                                    if text_pos <= tab.find_replace_state.replace_query.len() {
-                                        tab.find_replace_state.replace_cursor_position = text_pos;
-                                    }
+                        if relative_column >= replace_input_start
+                            && relative_column < replace_input_end
+                        {
+                            // Click on replace input field
+                            if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                tab.find_replace_state.focused_field =
+                                    FindFocusedField::Replace;
+                                // Set cursor position based on click
+                                let text_pos = relative_column - replace_input_start;
+                                if text_pos <= tab.find_replace_state.replace_query.len() {
+                                    tab.find_replace_state.replace_cursor_position = text_pos;
                                 }
-                                return true;
-                            } else if relative_column >= replace_btn_start
-                                && relative_column < replace_btn_start + replace_btn_width
-                            {
-                                // Click on Replace button
-                                if let Some(tab) = self.tab_manager.active_tab_mut() {
-                                    tab.replace_current();
-                                }
-                                return true;
-                            } else if relative_column >= replace_all_start
-                                && relative_column < replace_all_start + replace_all_width
-                            {
-                                // Click on Replace All button
-                                if let Some(tab) = self.tab_manager.active_tab_mut() {
-                                    tab.replace_all();
-                                }
-                                return true;
                             }
+                            return true;
+                        } else if relative_column >= replace_btn_start
+                            && relative_column < replace_btn_start + replace_btn_width
+                        {
+                            // Click on Replace button
+                            if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                tab.replace_current();
+                            }
+                            return true;
+                        } else if relative_column >= replace_all_start
+                            && relative_column < replace_all_start + replace_all_width
+                        {
+                            // Click on Replace All button
+                            if let Some(tab) = self.tab_manager.active_tab_mut() {
+                                tab.replace_all();
+                            }
+                            return true;
                         }
                     }
                 }
             }
-            _ => {}
         }
 
         false
