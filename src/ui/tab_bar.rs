@@ -27,7 +27,7 @@ impl TabBar {
 
         let tabs = tab_manager.tabs();
         let tab_count = tabs.len();
-        
+
         if tab_count == 0 {
             return 0;
         }
@@ -35,7 +35,7 @@ impl TabBar {
         // Fixed width per tab
         const TAB_WIDTH: usize = 14;
         let max_tabs_that_fit = tabs_width / TAB_WIDTH;
-        
+
         if tab_count <= max_tabs_that_fit {
             // All tabs are visible with fixed width
             // Simple calculation: tab_index * TAB_WIDTH
@@ -44,36 +44,42 @@ impl TabBar {
             // Too many tabs, showing subset with scrolling
             let active_index = tab_manager.active_index();
             let half_width = max_tabs_that_fit / 2;
-            
+
             let start_index = if active_index >= half_width {
                 (active_index - half_width).min(tab_count.saturating_sub(max_tabs_that_fit))
             } else {
                 0
             };
             let end_index = (start_index + max_tabs_that_fit).min(tab_count);
-            
+
             // Check if target tab is visible
             if target_tab_index < start_index || target_tab_index >= end_index {
                 return 0; // Tab is not visible
             }
-            
+
             // Calculate position
             let mut x_pos = 0u16;
-            
+
             // Account for left truncation indicator
             if start_index > 0 {
                 x_pos = 3; // Width of " « "
             }
-            
+
             // Add offset for the target tab
             let tab_offset = target_tab_index - start_index;
             x_pos += (tab_offset * TAB_WIDTH) as u16;
-            
+
             x_pos
         }
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect, tab_manager: &TabManager, dragging_tab: Option<usize>) {
+    pub fn draw(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        tab_manager: &TabManager,
+        dragging_tab: Option<usize>,
+    ) {
         let available_width = area.width as usize;
         let hint_text = "  Ctrl+N";
         let hint_width = hint_text.len();
@@ -123,7 +129,7 @@ impl TabBar {
             for (i, tab) in tabs.iter().enumerate() {
                 let full_name = tab.display_name();
                 let truncated_name = self.truncate_name(&full_name, TAB_CONTENT_WIDTH);
-                
+
                 // Pad to fixed width
                 let tab_text = format!(" {:<width$} ", truncated_name, width = TAB_CONTENT_WIDTH);
 
@@ -166,10 +172,15 @@ impl TabBar {
                 ));
             }
 
-            for (i, tab) in tabs.iter().enumerate().skip(start_index).take(end_index - start_index) {
+            for (i, tab) in tabs
+                .iter()
+                .enumerate()
+                .skip(start_index)
+                .take(end_index - start_index)
+            {
                 let full_name = tab.display_name();
                 let truncated_name = self.truncate_name(&full_name, TAB_CONTENT_WIDTH);
-                
+
                 // Pad to fixed width
                 let tab_text = format!(" {:<width$} ", truncated_name, width = TAB_CONTENT_WIDTH);
 

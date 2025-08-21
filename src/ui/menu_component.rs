@@ -119,7 +119,7 @@ impl MenuComponent {
             };
 
             let label_with_checkbox = format!("{}{}", checkbox_prefix, item.label);
-            
+
             let line_text = if let Some(shortcut) = &item.shortcut {
                 // Right-align shortcut: " item_name                shortcut"
                 let available_space = self.width as usize - 2; // -2 for left and right padding
@@ -129,12 +129,20 @@ impl MenuComponent {
                 if item_len + shortcut_len < available_space {
                     // Enough space to separate item and shortcut
                     let spaces_needed = available_space - item_len - shortcut_len;
-                    format!(" {}{}{} ", label_with_checkbox, " ".repeat(spaces_needed), shortcut)
+                    format!(
+                        " {}{}{} ",
+                        label_with_checkbox,
+                        " ".repeat(spaces_needed),
+                        shortcut
+                    )
                 } else {
                     // Not enough space, truncate item name
                     let max_item_len = available_space.saturating_sub(shortcut_len + 1);
                     let truncated_item = if label_with_checkbox.len() > max_item_len {
-                        format!("{}…", &label_with_checkbox[..max_item_len.saturating_sub(1)])
+                        format!(
+                            "{}…",
+                            &label_with_checkbox[..max_item_len.saturating_sub(1)]
+                        )
                     } else {
                         label_with_checkbox.clone()
                     };

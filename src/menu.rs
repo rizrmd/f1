@@ -191,7 +191,7 @@ impl FilePickerState {
                             .and_then(|n| n.to_str())
                             .unwrap_or("")
                             .to_string();
-                        
+
                         // Skip hidden directories
                         if !name.starts_with('.') {
                             self.search_recursive(&path, &query, 1, 3); // Start at depth 1
@@ -298,45 +298,45 @@ impl FilePickerState {
     pub fn get_selected_item(&self) -> Option<&FileItem> {
         self.filtered_items.get(self.selected_index)
     }
-    
+
     pub fn scroll_up(&mut self, base_amount: usize) {
         // Update scroll acceleration
         self.update_scroll_acceleration();
-        
+
         // Calculate actual scroll amount with acceleration
         let scroll_amount = base_amount.saturating_mul(self.scroll_acceleration);
         self.selected_index = self.selected_index.saturating_sub(scroll_amount);
         self.hovered_index = None; // Clear hover when scrolling
     }
-    
+
     pub fn scroll_down(&mut self, base_amount: usize) {
         // Update scroll acceleration
         self.update_scroll_acceleration();
-        
+
         // Calculate actual scroll amount with acceleration
         let scroll_amount = base_amount.saturating_mul(self.scroll_acceleration);
         let max_index = self.filtered_items.len().saturating_sub(1);
         self.selected_index = (self.selected_index + scroll_amount).min(max_index);
         self.hovered_index = None; // Clear hover when scrolling
     }
-    
+
     fn update_scroll_acceleration(&mut self) {
         let now = Instant::now();
-        
+
         if let Some(last_time) = self.last_scroll_time {
             // If scrolling within 150ms, increase acceleration
             if now.duration_since(last_time).as_millis() < 150 {
                 // More aggressive acceleration for file picker
                 let increment = if self.scroll_acceleration < 3 {
-                    1  // Start with +1 for initial acceleration
+                    1 // Start with +1 for initial acceleration
                 } else if self.scroll_acceleration < 8 {
-                    2  // Medium acceleration +2
+                    2 // Medium acceleration +2
                 } else if self.scroll_acceleration < 15 {
-                    3  // Fast acceleration +3
+                    3 // Fast acceleration +3
                 } else {
-                    4  // Very fast +4
+                    4 // Very fast +4
                 };
-                
+
                 self.scroll_acceleration = (self.scroll_acceleration + increment).min(20);
             } else {
                 // Reset acceleration if too much time has passed
@@ -346,7 +346,7 @@ impl FilePickerState {
             // First scroll, start with base acceleration
             self.scroll_acceleration = 1;
         }
-        
+
         self.last_scroll_time = Some(now);
     }
 }
@@ -395,12 +395,18 @@ impl MenuSystem {
                         .with_shortcut("Ctrl+G"),
                     MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                         .with_shortcut("Ctrl+P"),
-                    MenuItem::new("Tree View", MenuAction::Custom("toggle_tree_view".to_string()))
-                        .with_checkbox(tree_view_enabled)
-                        .with_shortcut("Ctrl+T"),
-                    MenuItem::new("Find Inline", MenuAction::Custom("toggle_find_inline".to_string()))
-                        .with_checkbox(find_inline_enabled)
-                        .with_shortcut("Ctrl+F"),
+                    MenuItem::new(
+                        "Tree View",
+                        MenuAction::Custom("toggle_tree_view".to_string()),
+                    )
+                    .with_checkbox(tree_view_enabled)
+                    .with_shortcut("Ctrl+T"),
+                    MenuItem::new(
+                        "Find Inline",
+                        MenuAction::Custom("toggle_find_inline".to_string()),
+                    )
+                    .with_checkbox(find_inline_enabled)
+                    .with_shortcut("Ctrl+F"),
                     MenuItem::new(
                         "Word Wrap",
                         MenuAction::Custom("toggle_word_wrap".to_string()),
@@ -435,12 +441,18 @@ impl MenuSystem {
                 .with_shortcut("Ctrl+G"),
             MenuItem::new("Open File", MenuAction::Custom("open_file".to_string()))
                 .with_shortcut("Ctrl+P"),
-            MenuItem::new("Tree View", MenuAction::Custom("toggle_tree_view".to_string()))
-                .with_checkbox(tree_view_enabled)
-                .with_shortcut("Ctrl+T"),
-            MenuItem::new("Find Inline", MenuAction::Custom("toggle_find_inline".to_string()))
-                .with_checkbox(find_inline_enabled)
-                .with_shortcut("Ctrl+F"),
+            MenuItem::new(
+                "Tree View",
+                MenuAction::Custom("toggle_tree_view".to_string()),
+            )
+            .with_checkbox(tree_view_enabled)
+            .with_shortcut("Ctrl+T"),
+            MenuItem::new(
+                "Find Inline",
+                MenuAction::Custom("toggle_find_inline".to_string()),
+            )
+            .with_checkbox(find_inline_enabled)
+            .with_shortcut("Ctrl+F"),
             MenuItem::new(
                 "Word Wrap",
                 MenuAction::Custom("toggle_word_wrap".to_string()),
@@ -542,7 +554,7 @@ impl MenuSystem {
             MenuAction::Custom("copy".to_string()),
         ));
         items.push(MenuItem::new("Cut", MenuAction::Custom("cut".to_string())));
-        
+
         // Only show Paste if there's something in clipboard
         if has_clipboard {
             items.push(MenuItem::new(
@@ -550,7 +562,7 @@ impl MenuSystem {
                 MenuAction::Custom("paste".to_string()),
             ));
         }
-        
+
         items.push(MenuItem::new(
             "Rename",
             MenuAction::Custom("rename".to_string()),
@@ -571,7 +583,7 @@ impl MenuSystem {
 
         self.state = MenuState::TreeContextMenu(context_state);
     }
-    
+
     pub fn open_tree_empty_area_menu(
         &mut self,
         path: PathBuf,
@@ -589,7 +601,7 @@ impl MenuSystem {
             "New Folder",
             MenuAction::Custom("new_folder".to_string()),
         ));
-        
+
         // Only show Paste if there's something in clipboard
         if has_clipboard {
             items.push(MenuItem::new(

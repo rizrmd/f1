@@ -38,8 +38,12 @@ impl<'a> EditorWidget<'a> {
             current_match_index: None,
         }
     }
-    
-    pub fn find_matches(mut self, matches: &'a Vec<crate::tab::FindMatch>, current_index: Option<usize>) -> Self {
+
+    pub fn find_matches(
+        mut self,
+        matches: &'a Vec<crate::tab::FindMatch>,
+        current_index: Option<usize>,
+    ) -> Self {
         self.find_matches = Some(matches);
         self.current_match_index = current_index;
         self
@@ -82,7 +86,7 @@ impl<'a> EditorWidget<'a> {
         if !self.word_wrap || available_width == 0 {
             return vec![line_text.to_string()];
         }
-        
+
         // Quick check if line might need wrapping (conservative estimate)
         if line_text.len() <= available_width && !line_text.contains('\t') {
             return vec![line_text.to_string()];
@@ -94,11 +98,11 @@ impl<'a> EditorWidget<'a> {
 
         for ch in line_text.chars() {
             // Calculate actual display width for tabs
-            let char_width = if ch == '\t' { 
+            let char_width = if ch == '\t' {
                 // Tab width depends on current position
                 4 - (current_width % 4)
-            } else { 
-                1 
+            } else {
+                1
             };
 
             if current_width + char_width > available_width && !current_line.is_empty() {
@@ -136,10 +140,11 @@ impl<'a> EditorWidget<'a> {
 
         // Get selection range if any
         let selection = self.cursor.get_selection();
-        
+
         // Check for find matches on this line
         let line_matches = if let Some(matches) = self.find_matches {
-            matches.iter()
+            matches
+                .iter()
                 .enumerate()
                 .filter_map(|(idx, m)| {
                     if m.start.line == line_idx {
@@ -153,7 +158,7 @@ impl<'a> EditorWidget<'a> {
             Vec::new()
         };
 
-        let mut visual_col = 0;  // Track visual column position
+        let mut visual_col = 0; // Track visual column position
         for (col, ch) in line_portion.chars().enumerate() {
             let actual_col = char_offset + col;
             let mut style = Style::default();
@@ -164,10 +169,14 @@ impl<'a> EditorWidget<'a> {
             } else {
                 false
             };
-            
+
             // Check if this character is within a find match
-            let is_match = line_matches.iter().find(|(_, start, end)| actual_col >= *start && actual_col < *end);
-            let is_current_match = is_match.map(|(idx, _, _)| Some(*idx) == self.current_match_index).unwrap_or(false);
+            let is_match = line_matches
+                .iter()
+                .find(|(_, start, end)| actual_col >= *start && actual_col < *end);
+            let is_current_match = is_match
+                .map(|(idx, _, _)| Some(*idx) == self.current_match_index)
+                .unwrap_or(false);
 
             // Handle cursor positioning
             let is_cursor_here = self.focused && cursor_col == Some(actual_col);
@@ -241,10 +250,11 @@ impl<'a> EditorWidget<'a> {
 
         // Get selection range if any
         let selection = self.cursor.get_selection();
-        
+
         // Check for find matches on this line
         let line_matches = if let Some(matches) = self.find_matches {
-            matches.iter()
+            matches
+                .iter()
                 .enumerate()
                 .filter_map(|(idx, m)| {
                     if m.start.line == line_idx {
@@ -258,7 +268,7 @@ impl<'a> EditorWidget<'a> {
             Vec::new()
         };
 
-        let mut visual_col = 0;  // Track visual column position
+        let mut visual_col = 0; // Track visual column position
         for (col, ch) in line_text.chars().enumerate() {
             let mut style = Style::default();
 
@@ -268,10 +278,14 @@ impl<'a> EditorWidget<'a> {
             } else {
                 false
             };
-            
+
             // Check if this character is within a find match
-            let is_match = line_matches.iter().find(|(_, start, end)| col >= *start && col < *end);
-            let is_current_match = is_match.map(|(idx, _, _)| Some(*idx) == self.current_match_index).unwrap_or(false);
+            let is_match = line_matches
+                .iter()
+                .find(|(_, start, end)| col >= *start && col < *end);
+            let is_current_match = is_match
+                .map(|(idx, _, _)| Some(*idx) == self.current_match_index)
+                .unwrap_or(false);
 
             // Handle cursor positioning
             let is_cursor_here = self.focused && cursor_col == Some(col);

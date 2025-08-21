@@ -1,4 +1,7 @@
-use crate::{cursor::{Cursor, Position}, rope_buffer::RopeBuffer};
+use crate::{
+    cursor::{Cursor, Position},
+    rope_buffer::RopeBuffer,
+};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -249,7 +252,7 @@ impl Tab {
 
     pub fn start_find(&mut self) {
         self.find_replace_state.active = true;
-        self.find_replace_state.is_replace_mode = true;  // Always show replace mode
+        self.find_replace_state.is_replace_mode = true; // Always show replace mode
         self.find_replace_state.find_query.clear();
         self.find_replace_state.replace_query.clear();
         self.find_replace_state.matches.clear();
@@ -276,7 +279,6 @@ impl Tab {
         self.find_replace_state.matches.clear();
         self.find_replace_state.current_match_index = None;
     }
-
 
     pub fn perform_find(&mut self) {
         self.find_replace_state.matches.clear();
@@ -309,13 +311,17 @@ impl Tab {
 
                 // Check whole word constraint if enabled
                 if self.find_replace_state.whole_word {
-                    let is_word_start = absolute_start == 0 
-                        || !search_text.chars().nth(absolute_start.saturating_sub(1))
+                    let is_word_start = absolute_start == 0
+                        || !search_text
+                            .chars()
+                            .nth(absolute_start.saturating_sub(1))
                             .is_some_and(|c| c.is_alphanumeric() || c == '_');
                     let is_word_end = match_end >= search_text.len()
-                        || !search_text.chars().nth(match_end)
+                        || !search_text
+                            .chars()
+                            .nth(match_end)
                             .is_some_and(|c| c.is_alphanumeric() || c == '_');
-                    
+
                     if is_word_start && is_word_end {
                         self.find_replace_state.matches.push(FindMatch {
                             start: Position::new(line_idx, absolute_start),
@@ -337,7 +343,9 @@ impl Tab {
         if !self.find_replace_state.matches.is_empty() {
             let cursor_pos = (self.cursor.position.line, self.cursor.position.column);
             for (i, m) in self.find_replace_state.matches.iter().enumerate() {
-                if m.start.line > cursor_pos.0 || (m.start.line == cursor_pos.0 && m.start.column >= cursor_pos.1) {
+                if m.start.line > cursor_pos.0
+                    || (m.start.line == cursor_pos.0 && m.start.column >= cursor_pos.1)
+                {
                     self.find_replace_state.current_match_index = Some(i);
                     break;
                 }
@@ -403,7 +411,7 @@ impl Tab {
 
                 // Get the line text
                 let line_text = self.buffer.get_line_text(m.start.line);
-                
+
                 // Perform replacement
                 let mut new_line = String::new();
                 new_line.push_str(&line_text[..m.start.column]);
@@ -438,7 +446,7 @@ impl Tab {
 
         for m in matches {
             let line_text = self.buffer.get_line_text(m.start.line);
-            
+
             let mut new_line = String::new();
             new_line.push_str(&line_text[..m.start.column]);
             new_line.push_str(&self.find_replace_state.replace_query);
@@ -448,7 +456,7 @@ impl Tab {
         }
 
         self.mark_modified();
-        
+
         // Clear matches after replace all
         self.find_replace_state.matches.clear();
         self.find_replace_state.current_match_index = None;
@@ -499,7 +507,7 @@ impl TabManager {
         self.tabs.push(tab);
         self.active_index = self.tabs.len() - 1;
     }
-    
+
     #[allow(dead_code)]
     pub fn add_or_switch_to_tab(&mut self, tab: Tab) {
         // Check if a tab with the same path already exists

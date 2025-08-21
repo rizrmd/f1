@@ -53,7 +53,6 @@ impl TreeNode {
             let entry = entry?;
             let path = entry.path();
 
-
             let node = TreeNode::new(path, self.depth + 1);
             entries.push(node);
         }
@@ -554,7 +553,6 @@ impl TreeView {
                 let path = entry.path();
 
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-
                     // Check if this item matches the search query
                     if name.to_lowercase().contains(query) {
                         let search_node = TreeNode::new(path.clone(), node.depth + 1);
@@ -607,7 +605,7 @@ impl TreeView {
     pub fn scroll_up(&mut self, base_amount: usize) {
         // Update scroll acceleration
         self.update_scroll_acceleration();
-        
+
         // Calculate actual scroll amount with acceleration
         let scroll_amount = base_amount.saturating_mul(self.scroll_acceleration);
         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
@@ -616,32 +614,32 @@ impl TreeView {
     pub fn scroll_down(&mut self, base_amount: usize, visible_height: usize) {
         // Update scroll acceleration
         self.update_scroll_acceleration();
-        
+
         // Calculate actual scroll amount with acceleration
         let scroll_amount = base_amount.saturating_mul(self.scroll_acceleration);
-        
+
         let visible_items = self.get_visible_items();
         let max_scroll = visible_items.len().saturating_sub(visible_height);
         self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_scroll);
     }
-    
+
     fn update_scroll_acceleration(&mut self) {
         let now = Instant::now();
-        
+
         if let Some(last_time) = self.last_scroll_time {
             // If scrolling within 150ms, increase acceleration
             if now.duration_since(last_time).as_millis() < 150 {
                 // More aggressive acceleration for tree view
                 let increment = if self.scroll_acceleration < 3 {
-                    1  // Start with +1 for initial acceleration
+                    1 // Start with +1 for initial acceleration
                 } else if self.scroll_acceleration < 8 {
-                    2  // Medium acceleration +2
+                    2 // Medium acceleration +2
                 } else if self.scroll_acceleration < 15 {
-                    3  // Fast acceleration +3
+                    3 // Fast acceleration +3
                 } else {
-                    4  // Very fast +4
+                    4 // Very fast +4
                 };
-                
+
                 self.scroll_acceleration = (self.scroll_acceleration + increment).min(20);
             } else {
                 // Reset acceleration if too much time has passed
@@ -651,7 +649,7 @@ impl TreeView {
             // First scroll, start with base acceleration
             self.scroll_acceleration = 1;
         }
-        
+
         self.last_scroll_time = Some(now);
     }
 
@@ -686,7 +684,7 @@ impl TreeView {
     pub fn copy_selected(&mut self) {
         if let Some(item) = self.get_selected_item() {
             let path = item.path.clone();
-            
+
             // Copy to internal clipboard for file operations
             self.clipboard = Some(ClipboardEntry {
                 path,
@@ -698,12 +696,9 @@ impl TreeView {
     pub fn cut_selected(&mut self) {
         if let Some(item) = self.get_selected_item() {
             let path = item.path.clone();
-            
+
             // Copy to internal clipboard for file operations
-            self.clipboard = Some(ClipboardEntry {
-                path,
-                is_cut: true,
-            });
+            self.clipboard = Some(ClipboardEntry { path, is_cut: true });
         }
     }
 

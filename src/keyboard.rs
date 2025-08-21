@@ -21,7 +21,7 @@ pub fn handle_key_event(
 
     // On macOS, Option key might be reported as ALT or META
     let has_option = has_alt || has_meta;
-    
+
     // On macOS, Cmd key is often not passed through terminal emulators
     // Some terminals map Cmd to other modifiers or don't pass it at all
     // We'll use Ctrl as the primary modifier for all platforms
@@ -29,7 +29,7 @@ pub fn handle_key_event(
     let has_cmd = has_super || has_meta;
     #[cfg(not(target_os = "macos"))]
     let has_cmd = false;
-    
+
     // Use either Ctrl or Cmd (on macOS) for standard shortcuts
     let has_primary_modifier = has_ctrl || has_cmd;
 
@@ -75,7 +75,7 @@ pub fn handle_key_event(
             }
             Some(EditorCommand::Modified)
         }
-        
+
         // Cut current line - Ctrl+K or Cmd+K (alternative shortcut)
         KeyCode::Char('k') if has_primary_modifier => {
             if cursor.has_selection() {
@@ -381,12 +381,12 @@ fn copy_selection(buffer: &RopeBuffer, cursor: &Cursor) {
 
         if end_idx > start_idx {
             let selected_text = buffer.slice(start_idx..end_idx).to_string();
-            
+
             // Copy to internal clipboard
             if let Ok(mut clipboard) = get_clipboard().lock() {
                 *clipboard = selected_text.clone();
             }
-            
+
             // Also copy to system clipboard
             if let Ok(mut system_clipboard) = Clipboard::new() {
                 let _ = system_clipboard.set_text(&selected_text);
@@ -402,7 +402,7 @@ fn cut_selection(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
 
 fn cut_current_line(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
     let current_line = cursor.position.line;
-    
+
     // Get the entire line including the newline character
     let line_start_idx = buffer.line_to_char(current_line);
     let next_line_start = if current_line + 1 < buffer.len_lines() {
@@ -411,24 +411,24 @@ fn cut_current_line(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
         // Last line - just go to end of buffer
         buffer.len_chars()
     };
-    
+
     // Copy the line to clipboard
     if next_line_start > line_start_idx {
         let line_text = buffer.slice(line_start_idx..next_line_start).to_string();
-        
+
         // Copy to internal clipboard
         if let Ok(mut clipboard) = get_clipboard().lock() {
             *clipboard = line_text.clone();
         }
-        
+
         // Also copy to system clipboard
         if let Ok(mut system_clipboard) = Clipboard::new() {
             let _ = system_clipboard.set_text(&line_text);
         }
-        
+
         // Delete the line
         buffer.remove(line_start_idx..next_line_start);
-        
+
         // Move cursor to the beginning of the line (which is now the next line)
         cursor.position.column = 0;
         // Adjust line position if we deleted the last line
@@ -467,28 +467,28 @@ fn paste_from_clipboard(buffer: &mut RopeBuffer, cursor: &mut Cursor) {
     if !text_to_paste.is_empty() {
         let char_idx = cursor.to_char_index(buffer);
         let initial_column = cursor.position.column;
-        
+
         // Insert the text all at once - this is already efficient in ropey
         buffer.insert(char_idx, &text_to_paste);
 
         // Calculate new cursor position efficiently without iterating through characters
         let lines: Vec<&str> = text_to_paste.lines().collect();
         let num_new_lines = lines.len().saturating_sub(1);
-        
+
         if num_new_lines > 0 {
             // Multi-line paste: cursor goes to the end of the last pasted line
             cursor.position.line += num_new_lines;
             // For multi-line paste, we need to account for text after cursor on original line
             // The last line length is where the cursor should be
             cursor.position.column = lines.last().unwrap_or(&"").len();
-            
+
             // If we pasted in the middle of a line, the remaining text is now after our cursor
             // on the last line of the pasted content, so we don't need to adjust further
         } else {
             // Single line paste: just advance by the pasted text length
             cursor.position.column = initial_column + text_to_paste.len();
         }
-        
+
         // Clear selection after paste
         cursor.clear_selection();
     }

@@ -63,7 +63,8 @@ impl UI {
             .split(size);
 
         // Render tab bar
-        self.tab_bar.draw(frame, chunks[0], tab_manager, dragging_tab);
+        self.tab_bar
+            .draw(frame, chunks[0], tab_manager, dragging_tab);
 
         let main_area = chunks[1];
 
@@ -86,15 +87,16 @@ impl UI {
             if let Some(tab) = tab_manager.active_tab_mut() {
                 // Check if we need to show find/replace bar in editor area
                 let final_editor_area = if tab.find_replace_state.active {
-                    let bar_height = if tab.find_replace_state.is_replace_mode { 2 } else { 1 };
+                    let bar_height = if tab.find_replace_state.is_replace_mode {
+                        2
+                    } else {
+                        1
+                    };
                     let split = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Length(bar_height),
-                            Constraint::Min(0),
-                        ])
+                        .constraints([Constraint::Length(bar_height), Constraint::Min(0)])
                         .split(editor_area);
-                    
+
                     // Draw find/replace bar at top of editor
                     self.draw_find_replace_bar(frame, split[0], &tab.find_replace_state);
                     split[1]
@@ -116,12 +118,15 @@ impl UI {
                         .show_line_numbers(true)
                         .focused(is_editor_focused)
                         .word_wrap(tab.word_wrap);
-                    
+
                     // Add find matches if search is active
                     if tab.find_replace_state.active && !tab.find_replace_state.matches.is_empty() {
-                        editor = editor.find_matches(&tab.find_replace_state.matches, tab.find_replace_state.current_match_index);
+                        editor = editor.find_matches(
+                            &tab.find_replace_state.matches,
+                            tab.find_replace_state.current_match_index,
+                        );
                     }
-                    
+
                     frame.render_widget(editor, final_editor_area);
                 }
             }
@@ -130,15 +135,16 @@ impl UI {
             if let Some(tab) = tab_manager.active_tab_mut() {
                 // Check if we need to show find/replace bar
                 let final_editor_area = if tab.find_replace_state.active {
-                    let bar_height = if tab.find_replace_state.is_replace_mode { 2 } else { 1 };
+                    let bar_height = if tab.find_replace_state.is_replace_mode {
+                        2
+                    } else {
+                        1
+                    };
                     let split = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Length(bar_height),
-                            Constraint::Min(0),
-                        ])
+                        .constraints([Constraint::Length(bar_height), Constraint::Min(0)])
                         .split(main_area);
-                    
+
                     // Draw find/replace bar at top of editor
                     self.draw_find_replace_bar(frame, split[0], &tab.find_replace_state);
                     split[1]
@@ -159,12 +165,15 @@ impl UI {
                         .show_line_numbers(true)
                         .focused(true)
                         .word_wrap(tab.word_wrap);
-                    
+
                     // Add find matches if search is active
                     if tab.find_replace_state.active && !tab.find_replace_state.matches.is_empty() {
-                        editor = editor.find_matches(&tab.find_replace_state.matches, tab.find_replace_state.current_match_index);
+                        editor = editor.find_matches(
+                            &tab.find_replace_state.matches,
+                            tab.find_replace_state.current_match_index,
+                        );
                     }
-                    
+
                     frame.render_widget(editor, final_editor_area);
                 }
             }
@@ -485,9 +494,14 @@ impl UI {
         frame.render_widget(buttons_paragraph, dialog_chunks[4]);
     }
 
-    fn draw_find_replace_bar(&self, frame: &mut Frame, area: Rect, find_state: &crate::tab::FindReplaceState) {
+    fn draw_find_replace_bar(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        find_state: &crate::tab::FindReplaceState,
+    ) {
         use crate::tab::FindFocusedField;
-        
+
         // Clear background
         let bg_style = Style::default().bg(Color::Rgb(40, 40, 40));
         frame.render_widget(Block::default().style(bg_style), area);
@@ -496,17 +510,12 @@ impl UI {
         let rows = if find_state.is_replace_mode {
             Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                ])
+                .constraints([Constraint::Length(1), Constraint::Length(1)])
                 .split(area)
         } else {
             Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(1),
-                ])
+                .constraints([Constraint::Length(1)])
                 .split(area)
         };
 
@@ -515,13 +524,13 @@ impl UI {
         let find_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(10),  // "Find:" label (aligned with Replace)
-                Constraint::Min(20),     // Input field (flexible)
-                Constraint::Length(12),  // Match counter
-                Constraint::Length(12),  // Find Next button (with padding)
-                Constraint::Length(5),   // Case button
-                Constraint::Length(5),   // Whole word button
-                Constraint::Length(2),   // Right padding
+                Constraint::Length(10), // "Find:" label (aligned with Replace)
+                Constraint::Min(20),    // Input field (flexible)
+                Constraint::Length(12), // Match counter
+                Constraint::Length(12), // Find Next button (with padding)
+                Constraint::Length(5),  // Case button
+                Constraint::Length(5),  // Whole word button
+                Constraint::Length(2),  // Right padding
             ])
             .split(find_row);
 
@@ -535,14 +544,15 @@ impl UI {
         } else {
             Style::default().bg(Color::Rgb(50, 50, 50)).fg(Color::Gray)
         };
-        
+
         let mut find_text = find_state.find_query.clone();
-        if find_state.focused_field == FindFocusedField::Find && find_state.find_cursor_position <= find_text.len() {
+        if find_state.focused_field == FindFocusedField::Find
+            && find_state.find_cursor_position <= find_text.len()
+        {
             find_text.insert(find_state.find_cursor_position, '│');
         }
-        
-        let find_input = Paragraph::new(find_text)
-            .style(find_input_style);
+
+        let find_input = Paragraph::new(find_text).style(find_input_style);
         frame.render_widget(find_input, find_chunks[1]);
 
         // Match counter
@@ -564,9 +574,11 @@ impl UI {
 
         // Find Next button with padding
         let find_next_btn = Paragraph::new(" Find Next ")
-            .style(Style::default()
-                .bg(Color::Rgb(60, 90, 120))
-                .fg(Color::White))
+            .style(
+                Style::default()
+                    .bg(Color::Rgb(60, 90, 120))
+                    .fg(Color::White),
+            )
             .alignment(Alignment::Center);
         frame.render_widget(find_next_btn, find_chunks[3]);
 
@@ -611,13 +623,13 @@ impl UI {
             let replace_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Length(10),  // "Replace:" label (aligned with Find)
-                    Constraint::Min(20),     // Input field (flexible, same as Find)
-                    Constraint::Length(12),  // Space matching Find's match counter
-                    Constraint::Length(12),  // Replace button (matches Find Next position)
-                    Constraint::Length(5),   // Space matching Case button
-                    Constraint::Length(5),   // Space matching Whole word button
-                    Constraint::Length(2),   // Right padding (same as Find)
+                    Constraint::Length(10), // "Replace:" label (aligned with Find)
+                    Constraint::Min(20),    // Input field (flexible, same as Find)
+                    Constraint::Length(12), // Space matching Find's match counter
+                    Constraint::Length(12), // Replace button (matches Find Next position)
+                    Constraint::Length(5),  // Space matching Case button
+                    Constraint::Length(5),  // Space matching Whole word button
+                    Constraint::Length(2),  // Right padding (same as Find)
                 ])
                 .split(replace_row);
 
@@ -631,24 +643,27 @@ impl UI {
             } else {
                 Style::default().bg(Color::Rgb(50, 50, 50)).fg(Color::Gray)
             };
-            
+
             let mut replace_text = find_state.replace_query.clone();
-            if find_state.focused_field == FindFocusedField::Replace && find_state.replace_cursor_position <= replace_text.len() {
+            if find_state.focused_field == FindFocusedField::Replace
+                && find_state.replace_cursor_position <= replace_text.len()
+            {
                 replace_text.insert(find_state.replace_cursor_position, '│');
             }
-            
-            let replace_input = Paragraph::new(replace_text)
-                .style(replace_input_style);
+
+            let replace_input = Paragraph::new(replace_text).style(replace_input_style);
             frame.render_widget(replace_input, replace_chunks[1]);
 
             // Empty space for alignment with Find row
             // (aligns with match counter in Find row)
-            
+
             // Replace button (aligns with Find Next button)
             let replace_btn = Paragraph::new(" Replace ")
-                .style(Style::default()
-                    .bg(Color::Rgb(50, 100, 50))
-                    .fg(Color::White))
+                .style(
+                    Style::default()
+                        .bg(Color::Rgb(50, 100, 50))
+                        .fg(Color::White),
+                )
                 .alignment(Alignment::Center);
             frame.render_widget(replace_btn, replace_chunks[3]);
 
@@ -660,9 +675,11 @@ impl UI {
                 height: replace_chunks[4].height,
             };
             let replace_all_btn = Paragraph::new(" Replace All ")
-                .style(Style::default()
-                    .bg(Color::Rgb(50, 100, 50))
-                    .fg(Color::White))
+                .style(
+                    Style::default()
+                        .bg(Color::Rgb(50, 100, 50))
+                        .fg(Color::White),
+                )
                 .alignment(Alignment::Center);
             frame.render_widget(replace_all_btn, replace_all_area);
         }
@@ -686,10 +703,9 @@ impl UI {
 
         // Clear the area with a subtle background
         frame.render_widget(Clear, modal_area);
-        
+
         // Fill background with a subtle color
-        let background = Block::default()
-            .style(Style::default().bg(Color::Rgb(25, 25, 30)));
+        let background = Block::default().style(Style::default().bg(Color::Rgb(25, 25, 30)));
         frame.render_widget(background, modal_area);
 
         // Create layout with padding
@@ -709,26 +725,31 @@ impl UI {
             width: modal_chunks[0].width,
             height: 1,
         };
-        
+
         // Draw search input with proper padding
         let search_text = if picker_state.search_query.is_empty() {
             "  Type to search files...".to_string()
         } else {
             format!("  {}", picker_state.search_query)
         };
-        
+
         let search_style = if picker_state.search_query.is_empty() {
-            Style::default().fg(Color::Rgb(100, 100, 100)).bg(Color::Rgb(35, 35, 40))
+            Style::default()
+                .fg(Color::Rgb(100, 100, 100))
+                .bg(Color::Rgb(35, 35, 40))
         } else {
             Style::default().fg(Color::White).bg(Color::Rgb(35, 35, 40))
         };
-        
+
         let mut search_spans = vec![Span::styled(&search_text, search_style)];
         // Add cursor at the end if there's a query
         if !picker_state.search_query.is_empty() {
-            search_spans.push(Span::styled("│", Style::default().fg(Color::Cyan).bg(Color::Rgb(35, 35, 40))));
+            search_spans.push(Span::styled(
+                "│",
+                Style::default().fg(Color::Cyan).bg(Color::Rgb(35, 35, 40)),
+            ));
         }
-        
+
         let search_input = Paragraph::new(Line::from(search_spans))
             .style(Style::default().bg(Color::Rgb(35, 35, 40)));
         frame.render_widget(search_input, search_area);
@@ -789,13 +810,19 @@ impl UI {
             let style = if is_selected {
                 Style::default().bg(Color::Rgb(60, 60, 70)).fg(Color::White)
             } else {
-                Style::default().fg(Color::Rgb(200, 200, 200)).bg(Color::Rgb(25, 25, 30))
+                Style::default()
+                    .fg(Color::Rgb(200, 200, 200))
+                    .bg(Color::Rgb(25, 25, 30))
             };
 
             let dim_style = if is_selected {
-                Style::default().bg(Color::Rgb(60, 60, 70)).fg(Color::Rgb(150, 150, 150))
+                Style::default()
+                    .bg(Color::Rgb(60, 60, 70))
+                    .fg(Color::Rgb(150, 150, 150))
             } else {
-                Style::default().fg(Color::Rgb(100, 100, 100)).bg(Color::Rgb(25, 25, 30))
+                Style::default()
+                    .fg(Color::Rgb(100, 100, 100))
+                    .bg(Color::Rgb(25, 25, 30))
             };
 
             // Icon based on type using the modular icon system

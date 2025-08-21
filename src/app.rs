@@ -58,9 +58,9 @@ pub struct App {
     pub global_word_wrap: bool,
     last_scroll_time: Option<Instant>,
     scroll_acceleration: usize,
-    dragging_tab: Option<usize>,  // Index of tab being dragged
-    drag_start_x: u16,  // Starting X position of drag
-    tab_was_active_on_click: bool,  // Whether the tab was already active when clicked
+    dragging_tab: Option<usize>,   // Index of tab being dragged
+    drag_start_x: u16,             // Starting X position of drag
+    tab_was_active_on_click: bool, // Whether the tab was already active when clicked
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,12 +106,12 @@ impl App {
             drag_start_x: 0,
             tab_was_active_on_click: false,
         };
-        
+
         // Apply global word wrap to initial tab
         if let Some(tab) = app.tab_manager.active_tab_mut() {
             tab.word_wrap = app.global_word_wrap;
         }
-        
+
         app
     }
 
@@ -190,8 +190,13 @@ impl App {
                     .active_tab()
                     .map(|t| t.find_replace_state.active)
                     .unwrap_or(false);
-                self.menu_system
-                    .toggle_main_menu(is_markdown, in_preview_mode, word_wrap_enabled, tree_view_enabled, find_inline_enabled);
+                self.menu_system.toggle_main_menu(
+                    is_markdown,
+                    in_preview_mode,
+                    word_wrap_enabled,
+                    tree_view_enabled,
+                    find_inline_enabled,
+                );
             }
             EditorCommand::OpenFile => {
                 // Get the current tab's file path to open picker in that directory
@@ -228,7 +233,7 @@ impl App {
             EditorCommand::ToggleWordWrap => {
                 // Toggle global word wrap setting
                 self.global_word_wrap = !self.global_word_wrap;
-                
+
                 // Apply to all tabs
                 for tab in &mut self.tab_manager.tabs {
                     tab.word_wrap = self.global_word_wrap;
@@ -366,7 +371,7 @@ impl App {
                             "toggle_word_wrap" => {
                                 // Toggle global word wrap setting
                                 self.global_word_wrap = !self.global_word_wrap;
-                                
+
                                 // Apply to all tabs
                                 for tab in &mut self.tab_manager.tabs {
                                     tab.word_wrap = self.global_word_wrap;
@@ -376,8 +381,10 @@ impl App {
                                 if self.tree_view.is_some() {
                                     self.tree_view = None;
                                 } else {
-                                    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                                    self.tree_view = TreeView::new(current_dir, self.sidebar_width).ok();
+                                    let current_dir = std::env::current_dir()
+                                        .unwrap_or_else(|_| PathBuf::from("."));
+                                    self.tree_view =
+                                        TreeView::new(current_dir, self.sidebar_width).ok();
                                     if self.tree_view.is_some() {
                                         self.expand_tree_to_current_file();
                                     }
@@ -837,11 +844,14 @@ impl App {
                     (KeyCode::F(3), KeyModifiers::NONE) => {
                         let (idx, total) = if let Some(tab) = self.tab_manager.active_tab_mut() {
                             tab.find_next();
-                            (tab.find_replace_state.current_match_index, tab.find_replace_state.matches.len())
+                            (
+                                tab.find_replace_state.current_match_index,
+                                tab.find_replace_state.matches.len(),
+                            )
                         } else {
                             (None, 0)
                         };
-                        
+
                         if let Some(idx) = idx {
                             self.set_status_message(
                                 format!("Match {} of {}", idx + 1, total),
@@ -854,11 +864,14 @@ impl App {
                     (KeyCode::F(3), KeyModifiers::SHIFT) => {
                         let (idx, total) = if let Some(tab) = self.tab_manager.active_tab_mut() {
                             tab.find_prev();
-                            (tab.find_replace_state.current_match_index, tab.find_replace_state.matches.len())
+                            (
+                                tab.find_replace_state.current_match_index,
+                                tab.find_replace_state.matches.len(),
+                            )
                         } else {
                             (None, 0)
                         };
-                        
+
                         if let Some(idx) = idx {
                             self.set_status_message(
                                 format!("Match {} of {}", idx + 1, total),
@@ -871,7 +884,10 @@ impl App {
                     (KeyCode::Esc, KeyModifiers::NONE) => {
                         if let Some(tab) = self.tab_manager.active_tab_mut() {
                             tab.stop_find_replace();
-                            self.set_status_message("Find cancelled".to_string(), Duration::from_secs(2));
+                            self.set_status_message(
+                                "Find cancelled".to_string(),
+                                Duration::from_secs(2),
+                            );
                         }
                         return;
                     }
@@ -1278,7 +1294,7 @@ impl App {
 
         if let Some(tab) = self.tab_manager.active_tab_mut() {
             let now = Instant::now();
-            
+
             // Check if we're continuing to scroll (within 100ms of last scroll)
             if let Some(last_time) = self.last_scroll_time {
                 let elapsed = now.duration_since(last_time).as_millis();
@@ -1286,15 +1302,15 @@ impl App {
                     // More aggressive acceleration
                     // Increase by larger amounts as acceleration grows
                     let increment = if self.scroll_acceleration < 5 {
-                        2  // Start with +2 for initial acceleration
+                        2 // Start with +2 for initial acceleration
                     } else if self.scroll_acceleration < 15 {
-                        3  // Medium acceleration +3
+                        3 // Medium acceleration +3
                     } else if self.scroll_acceleration < 30 {
-                        5  // Fast acceleration +5
+                        5 // Fast acceleration +5
                     } else {
-                        8  // Very fast acceleration +8
+                        8 // Very fast acceleration +8
                     };
-                    
+
                     self.scroll_acceleration = (self.scroll_acceleration + increment).min(50);
                 } else {
                     // Reset acceleration if too much time has passed
@@ -1304,10 +1320,10 @@ impl App {
                 // First scroll, start with base acceleration
                 self.scroll_acceleration = 1;
             }
-            
+
             // Update last scroll time
             self.last_scroll_time = Some(now);
-            
+
             // Calculate scroll amount based on acceleration
             // Now can go up to 50 lines per scroll for very long documents
             let scroll_amount = self.scroll_acceleration;
@@ -1405,10 +1421,10 @@ impl App {
                         // Store potential drag information
                         self.dragging_tab = Some(clicked_tab);
                         self.drag_start_x = mouse.column;
-                        
+
                         // Remember if this tab was already active
                         self.tab_was_active_on_click = clicked_tab == active_index;
-                        
+
                         // Switch to the clicked tab if different
                         if clicked_tab != active_index {
                             self.tab_manager.set_active_index(clicked_tab);
@@ -1487,10 +1503,13 @@ impl App {
                 if let Some(dragging_idx) = self.dragging_tab {
                     if mouse.row == 0 {
                         // Close menu when dragging starts
-                        if matches!(self.menu_system.state, crate::menu::MenuState::CurrentTabMenu(_)) {
+                        if matches!(
+                            self.menu_system.state,
+                            crate::menu::MenuState::CurrentTabMenu(_)
+                        ) {
                             self.menu_system.close();
                         }
-                        
+
                         // Calculate which tab position we're hovering over
                         if let Some(hover_tab) = self.get_clicked_tab(mouse.column) {
                             if hover_tab != dragging_idx {
@@ -1503,7 +1522,7 @@ impl App {
                     }
                     return;
                 }
-                
+
                 // Check if we're in markdown preview mode - disable selection if so
                 if let Some(tab) = self.tab_manager.active_tab() {
                     if tab.preview_mode && tab.is_markdown() {
@@ -1536,7 +1555,10 @@ impl App {
                             // Only toggle menu if the tab was already active when we clicked it
                             if self.tab_was_active_on_click {
                                 // Toggle current tab menu
-                                if matches!(self.menu_system.state, crate::menu::MenuState::CurrentTabMenu(_)) {
+                                if matches!(
+                                    self.menu_system.state,
+                                    crate::menu::MenuState::CurrentTabMenu(_)
+                                ) {
                                     self.menu_system.close();
                                 } else {
                                     self.menu_system.open_current_tab_menu();
@@ -1545,11 +1567,11 @@ impl App {
                         }
                     }
                 }
-                
+
                 // Stop dragging tab and reset state
                 self.dragging_tab = None;
                 self.tab_was_active_on_click = false;
-                
+
                 // Check if we're in markdown preview mode - disable selection if so
                 if let Some(tab) = self.tab_manager.active_tab() {
                     if tab.preview_mode && tab.is_markdown() {
@@ -1919,7 +1941,7 @@ impl App {
                                         "toggle_word_wrap" => {
                                             // Toggle global word wrap setting
                                             self.global_word_wrap = !self.global_word_wrap;
-                                            
+
                                             // Apply to all tabs
                                             for tab in &mut self.tab_manager.tabs {
                                                 tab.word_wrap = self.global_word_wrap;
@@ -1929,8 +1951,11 @@ impl App {
                                             if self.tree_view.is_some() {
                                                 self.tree_view = None;
                                             } else {
-                                                let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                                                self.tree_view = TreeView::new(current_dir, self.sidebar_width).ok();
+                                                let current_dir = std::env::current_dir()
+                                                    .unwrap_or_else(|_| PathBuf::from("."));
+                                                self.tree_view =
+                                                    TreeView::new(current_dir, self.sidebar_width)
+                                                        .ok();
                                                 if self.tree_view.is_some() {
                                                     self.expand_tree_to_current_file();
                                                 }
@@ -2066,7 +2091,8 @@ impl App {
                                             if let Ok(content) =
                                                 std::fs::read_to_string(&target_path)
                                             {
-                                                let mut new_tab = Tab::from_file(target_path, &content);
+                                                let mut new_tab =
+                                                    Tab::from_file(target_path, &content);
                                                 new_tab.word_wrap = self.global_word_wrap;
                                                 self.tab_manager.add_tab(new_tab);
                                                 self.expand_tree_to_current_file();
@@ -2130,18 +2156,18 @@ impl App {
         let hint_text = "  Ctrl+N";
         let hint_width = hint_text.len();
         let tabs_width = available_width.saturating_sub(hint_width);
-        
+
         let tabs = self.tab_manager.tabs();
         let tab_count = tabs.len();
-        
+
         if tab_count == 0 {
             return None;
         }
-        
+
         // Fixed width per tab
         const TAB_WIDTH: usize = 14;
         let max_tabs_that_fit = tabs_width / TAB_WIDTH;
-        
+
         if tab_count <= max_tabs_that_fit {
             // All tabs are visible with fixed width
             // Simple calculation: which tab based on x position
@@ -2153,16 +2179,16 @@ impl App {
             // Too many tabs, showing subset with scrolling
             let active_index = self.tab_manager.active_index();
             let half_width = max_tabs_that_fit / 2;
-            
+
             let start_index = if active_index >= half_width {
                 (active_index - half_width).min(tab_count.saturating_sub(max_tabs_that_fit))
             } else {
                 0
             };
             let end_index = (start_index + max_tabs_that_fit).min(tab_count);
-            
+
             let mut current_x = 0u16;
-            
+
             // Account for left truncation indicator
             if start_index > 0 {
                 if mouse_x < 3 {
@@ -2170,7 +2196,7 @@ impl App {
                 }
                 current_x = 3;
             }
-            
+
             // Check visible tabs
             for i in start_index..end_index {
                 if mouse_x >= current_x && mouse_x < current_x + TAB_WIDTH as u16 {
@@ -2179,7 +2205,7 @@ impl App {
                 current_x += TAB_WIDTH as u16;
             }
         }
-        
+
         None
     }
 
@@ -2197,17 +2223,17 @@ impl App {
         let hint_text = "  Ctrl+N";
         let hint_width = hint_text.len();
         let tabs_width = available_width.saturating_sub(hint_width);
-        
+
         let tab_count = self.tab_manager.tabs().len();
         if tab_count == 0 {
             // If no tabs, hint starts at x=0
             return mouse_x < hint_width as u16;
         }
-        
+
         // Fixed width per tab
         const TAB_WIDTH: usize = 14;
         let max_tabs_that_fit = tabs_width / TAB_WIDTH;
-        
+
         // Calculate where all tabs end
         let tabs_total_width = if tab_count <= max_tabs_that_fit {
             // All tabs visible with fixed width
@@ -2216,14 +2242,14 @@ impl App {
             // Showing subset with indicators
             let active_index = self.tab_manager.active_index();
             let half_width = max_tabs_that_fit / 2;
-            
+
             let start_index = if active_index >= half_width {
                 (active_index - half_width).min(tab_count.saturating_sub(max_tabs_that_fit))
             } else {
                 0
             };
             let end_index = (start_index + max_tabs_that_fit).min(tab_count);
-            
+
             let mut width = 0;
             if start_index > 0 {
                 width += 3; // " « "
@@ -2234,11 +2260,11 @@ impl App {
             }
             width
         };
-        
+
         // The hint starts right after the tabs
         let hint_start_x = tabs_total_width as u16;
         let hint_end_x = hint_start_x + hint_width as u16;
-        
+
         mouse_x >= hint_start_x && mouse_x < hint_end_x
     }
 
@@ -2623,21 +2649,22 @@ impl App {
                     }
                 }
                 // Ctrl/Alt+Backspace - delete word
-                (KeyCode::Backspace, KeyModifiers::CONTROL) | (KeyCode::Backspace, KeyModifiers::ALT) => {
+                (KeyCode::Backspace, KeyModifiers::CONTROL)
+                | (KeyCode::Backspace, KeyModifiers::ALT) => {
                     if !picker_state.search_query.is_empty() {
                         // Delete word backwards
                         let mut chars: Vec<char> = picker_state.search_query.chars().collect();
-                        
+
                         // Skip trailing whitespace
                         while !chars.is_empty() && chars.last().unwrap().is_whitespace() {
                             chars.pop();
                         }
-                        
+
                         // Delete word characters
                         while !chars.is_empty() && !chars.last().unwrap().is_whitespace() {
                             chars.pop();
                         }
-                        
+
                         picker_state.search_query = chars.into_iter().collect();
                         picker_state.update_filter();
                     }
@@ -2892,8 +2919,8 @@ impl App {
     }
 
     fn handle_find_replace_key(&mut self, key: KeyEvent) -> bool {
-        use crossterm::event::{KeyCode, KeyModifiers};
         use crate::tab::FindFocusedField;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         let tab = match self.tab_manager.active_tab_mut() {
             Some(tab) => tab,
@@ -2924,7 +2951,10 @@ impl App {
             (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::F(3), KeyModifiers::NONE) => {
                 if !tab.find_replace_state.matches.is_empty() {
                     tab.find_next();
-                    let (idx, total) = (tab.find_replace_state.current_match_index, tab.find_replace_state.matches.len());
+                    let (idx, total) = (
+                        tab.find_replace_state.current_match_index,
+                        tab.find_replace_state.matches.len(),
+                    );
                     if let Some(idx) = idx {
                         self.set_status_message(
                             format!("Match {} of {}", idx + 1, total),
@@ -2939,7 +2969,10 @@ impl App {
             (KeyCode::F(3), KeyModifiers::SHIFT) | (KeyCode::Enter, KeyModifiers::SHIFT) => {
                 if !tab.find_replace_state.matches.is_empty() {
                     tab.find_prev();
-                    let (idx, total) = (tab.find_replace_state.current_match_index, tab.find_replace_state.matches.len());
+                    let (idx, total) = (
+                        tab.find_replace_state.current_match_index,
+                        tab.find_replace_state.matches.len(),
+                    );
                     if let Some(idx) = idx {
                         self.set_status_message(
                             format!("Match {} of {}", idx + 1, total),
@@ -2968,14 +3001,18 @@ impl App {
             (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
                 tab.find_replace_state.is_replace_mode = !tab.find_replace_state.is_replace_mode;
                 // If toggling off replace mode, switch focus back to find field
-                if !tab.find_replace_state.is_replace_mode && tab.find_replace_state.focused_field == FindFocusedField::Replace {
+                if !tab.find_replace_state.is_replace_mode
+                    && tab.find_replace_state.focused_field == FindFocusedField::Replace
+                {
                     tab.find_replace_state.focused_field = FindFocusedField::Find;
                 }
                 return true;
             }
 
             // Ctrl+R to replace current
-            (KeyCode::Char('r'), KeyModifiers::CONTROL) if tab.find_replace_state.is_replace_mode => {
+            (KeyCode::Char('r'), KeyModifiers::CONTROL)
+                if tab.find_replace_state.is_replace_mode =>
+            {
                 tab.replace_current();
                 let remaining = tab.find_replace_state.matches.len();
                 if remaining > 0 {
@@ -2993,7 +3030,9 @@ impl App {
             }
 
             // Ctrl+Shift+R to replace all
-            (KeyCode::Char('R'), KeyModifiers::CONTROL | KeyModifiers::SHIFT) if tab.find_replace_state.is_replace_mode => {
+            (KeyCode::Char('R'), KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+                if tab.find_replace_state.is_replace_mode =>
+            {
                 let count = tab.find_replace_state.matches.len();
                 tab.replace_all();
                 self.set_status_message(
@@ -3007,12 +3046,16 @@ impl App {
             (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
                 match tab.find_replace_state.focused_field {
                     FindFocusedField::Find => {
-                        tab.find_replace_state.find_query.insert(tab.find_replace_state.find_cursor_position, c);
+                        tab.find_replace_state
+                            .find_query
+                            .insert(tab.find_replace_state.find_cursor_position, c);
                         tab.find_replace_state.find_cursor_position += 1;
                         tab.perform_find();
                     }
                     FindFocusedField::Replace => {
-                        tab.find_replace_state.replace_query.insert(tab.find_replace_state.replace_cursor_position, c);
+                        tab.find_replace_state
+                            .replace_query
+                            .insert(tab.find_replace_state.replace_cursor_position, c);
                         tab.find_replace_state.replace_cursor_position += 1;
                     }
                 }
@@ -3025,14 +3068,18 @@ impl App {
                     FindFocusedField::Find => {
                         if tab.find_replace_state.find_cursor_position > 0 {
                             tab.find_replace_state.find_cursor_position -= 1;
-                            tab.find_replace_state.find_query.remove(tab.find_replace_state.find_cursor_position);
+                            tab.find_replace_state
+                                .find_query
+                                .remove(tab.find_replace_state.find_cursor_position);
                             tab.perform_find();
                         }
                     }
                     FindFocusedField::Replace => {
                         if tab.find_replace_state.replace_cursor_position > 0 {
                             tab.find_replace_state.replace_cursor_position -= 1;
-                            tab.find_replace_state.replace_query.remove(tab.find_replace_state.replace_cursor_position);
+                            tab.find_replace_state
+                                .replace_query
+                                .remove(tab.find_replace_state.replace_cursor_position);
                         }
                     }
                 }
@@ -3040,13 +3087,15 @@ impl App {
             }
 
             // Ctrl+Backspace or Alt+Backspace - delete word
-            (KeyCode::Backspace, KeyModifiers::CONTROL) | (KeyCode::Backspace, KeyModifiers::ALT) => {
+            (KeyCode::Backspace, KeyModifiers::CONTROL)
+            | (KeyCode::Backspace, KeyModifiers::ALT) => {
                 match tab.find_replace_state.focused_field {
                     FindFocusedField::Find => {
                         if tab.find_replace_state.find_cursor_position > 0 {
-                            let chars: Vec<char> = tab.find_replace_state.find_query.chars().collect();
+                            let chars: Vec<char> =
+                                tab.find_replace_state.find_query.chars().collect();
                             let mut new_pos = tab.find_replace_state.find_cursor_position;
-                            
+
                             // Skip spaces backwards
                             while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
                                 new_pos -= 1;
@@ -3055,9 +3104,10 @@ impl App {
                             while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
                                 new_pos -= 1;
                             }
-                            
+
                             // Remove characters from new_pos to cursor_position
-                            let remove_count = tab.find_replace_state.find_cursor_position - new_pos;
+                            let remove_count =
+                                tab.find_replace_state.find_cursor_position - new_pos;
                             for _ in 0..remove_count {
                                 tab.find_replace_state.find_query.remove(new_pos);
                             }
@@ -3067,9 +3117,10 @@ impl App {
                     }
                     FindFocusedField::Replace => {
                         if tab.find_replace_state.replace_cursor_position > 0 {
-                            let chars: Vec<char> = tab.find_replace_state.replace_query.chars().collect();
+                            let chars: Vec<char> =
+                                tab.find_replace_state.replace_query.chars().collect();
                             let mut new_pos = tab.find_replace_state.replace_cursor_position;
-                            
+
                             // Skip spaces backwards
                             while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
                                 new_pos -= 1;
@@ -3078,9 +3129,10 @@ impl App {
                             while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
                                 new_pos -= 1;
                             }
-                            
+
                             // Remove characters from new_pos to cursor_position
-                            let remove_count = tab.find_replace_state.replace_cursor_position - new_pos;
+                            let remove_count =
+                                tab.find_replace_state.replace_cursor_position - new_pos;
                             for _ in 0..remove_count {
                                 tab.find_replace_state.replace_query.remove(new_pos);
                             }
@@ -3095,14 +3147,22 @@ impl App {
             (KeyCode::Delete, KeyModifiers::NONE) => {
                 match tab.find_replace_state.focused_field {
                     FindFocusedField::Find => {
-                        if tab.find_replace_state.find_cursor_position < tab.find_replace_state.find_query.len() {
-                            tab.find_replace_state.find_query.remove(tab.find_replace_state.find_cursor_position);
+                        if tab.find_replace_state.find_cursor_position
+                            < tab.find_replace_state.find_query.len()
+                        {
+                            tab.find_replace_state
+                                .find_query
+                                .remove(tab.find_replace_state.find_cursor_position);
                             tab.perform_find();
                         }
                     }
                     FindFocusedField::Replace => {
-                        if tab.find_replace_state.replace_cursor_position < tab.find_replace_state.replace_query.len() {
-                            tab.find_replace_state.replace_query.remove(tab.find_replace_state.replace_cursor_position);
+                        if tab.find_replace_state.replace_cursor_position
+                            < tab.find_replace_state.replace_query.len()
+                        {
+                            tab.find_replace_state
+                                .replace_query
+                                .remove(tab.find_replace_state.replace_cursor_position);
                         }
                     }
                 }
@@ -3131,9 +3191,10 @@ impl App {
                 match tab.find_replace_state.focused_field {
                     FindFocusedField::Find => {
                         if tab.find_replace_state.find_cursor_position > 0 {
-                            let chars: Vec<char> = tab.find_replace_state.find_query.chars().collect();
+                            let chars: Vec<char> =
+                                tab.find_replace_state.find_query.chars().collect();
                             let mut new_pos = tab.find_replace_state.find_cursor_position;
-                            
+
                             // Skip spaces backwards
                             while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
                                 new_pos -= 1;
@@ -3142,15 +3203,16 @@ impl App {
                             while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
                                 new_pos -= 1;
                             }
-                            
+
                             tab.find_replace_state.find_cursor_position = new_pos;
                         }
                     }
                     FindFocusedField::Replace => {
                         if tab.find_replace_state.replace_cursor_position > 0 {
-                            let chars: Vec<char> = tab.find_replace_state.replace_query.chars().collect();
+                            let chars: Vec<char> =
+                                tab.find_replace_state.replace_query.chars().collect();
                             let mut new_pos = tab.find_replace_state.replace_cursor_position;
-                            
+
                             // Skip spaces backwards
                             while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
                                 new_pos -= 1;
@@ -3159,7 +3221,7 @@ impl App {
                             while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
                                 new_pos -= 1;
                             }
-                            
+
                             tab.find_replace_state.replace_cursor_position = new_pos;
                         }
                     }
@@ -3171,12 +3233,16 @@ impl App {
             (KeyCode::Right, KeyModifiers::NONE) => {
                 match tab.find_replace_state.focused_field {
                     FindFocusedField::Find => {
-                        if tab.find_replace_state.find_cursor_position < tab.find_replace_state.find_query.len() {
+                        if tab.find_replace_state.find_cursor_position
+                            < tab.find_replace_state.find_query.len()
+                        {
                             tab.find_replace_state.find_cursor_position += 1;
                         }
                     }
                     FindFocusedField::Replace => {
-                        if tab.find_replace_state.replace_cursor_position < tab.find_replace_state.replace_query.len() {
+                        if tab.find_replace_state.replace_cursor_position
+                            < tab.find_replace_state.replace_query.len()
+                        {
                             tab.find_replace_state.replace_cursor_position += 1;
                         }
                     }
@@ -3190,9 +3256,10 @@ impl App {
                     FindFocusedField::Find => {
                         let len = tab.find_replace_state.find_query.len();
                         if tab.find_replace_state.find_cursor_position < len {
-                            let chars: Vec<char> = tab.find_replace_state.find_query.chars().collect();
+                            let chars: Vec<char> =
+                                tab.find_replace_state.find_query.chars().collect();
                             let mut new_pos = tab.find_replace_state.find_cursor_position;
-                            
+
                             // Skip word characters forward
                             while new_pos < len && !chars[new_pos].is_whitespace() {
                                 new_pos += 1;
@@ -3201,16 +3268,17 @@ impl App {
                             while new_pos < len && chars[new_pos].is_whitespace() {
                                 new_pos += 1;
                             }
-                            
+
                             tab.find_replace_state.find_cursor_position = new_pos;
                         }
                     }
                     FindFocusedField::Replace => {
                         let len = tab.find_replace_state.replace_query.len();
                         if tab.find_replace_state.replace_cursor_position < len {
-                            let chars: Vec<char> = tab.find_replace_state.replace_query.chars().collect();
+                            let chars: Vec<char> =
+                                tab.find_replace_state.replace_query.chars().collect();
                             let mut new_pos = tab.find_replace_state.replace_cursor_position;
-                            
+
                             // Skip word characters forward
                             while new_pos < len && !chars[new_pos].is_whitespace() {
                                 new_pos += 1;
@@ -3219,7 +3287,7 @@ impl App {
                             while new_pos < len && chars[new_pos].is_whitespace() {
                                 new_pos += 1;
                             }
-                            
+
                             tab.find_replace_state.replace_cursor_position = new_pos;
                         }
                     }
@@ -3244,10 +3312,12 @@ impl App {
             (KeyCode::End, KeyModifiers::NONE) => {
                 match tab.find_replace_state.focused_field {
                     FindFocusedField::Find => {
-                        tab.find_replace_state.find_cursor_position = tab.find_replace_state.find_query.len();
+                        tab.find_replace_state.find_cursor_position =
+                            tab.find_replace_state.find_query.len();
                     }
                     FindFocusedField::Replace => {
-                        tab.find_replace_state.replace_cursor_position = tab.find_replace_state.replace_query.len();
+                        tab.find_replace_state.replace_cursor_position =
+                            tab.find_replace_state.replace_query.len();
                     }
                 }
                 return true;
@@ -3624,7 +3694,6 @@ impl App {
         }
     }
 
-
     fn execute_file_operation(&mut self, operation: &str, target_path: &PathBuf, input: &str) {
         match operation {
             "save_file" => {
@@ -3998,8 +4067,8 @@ impl App {
     }
 
     fn handle_mouse_on_find_replace(&mut self, mouse: MouseEvent) -> bool {
-        use crossterm::event::{MouseButton, MouseEventKind};
         use crate::tab::FindFocusedField;
+        use crossterm::event::{MouseButton, MouseEventKind};
 
         // Check if find/replace is active
         let tab_has_find_active = if let Some(tab) = self.tab_manager.active_tab() {
@@ -4016,7 +4085,11 @@ impl App {
         // It appears at the top of the editor area (after tab bar and potentially after tree view top)
         let bar_start_y = 1; // After tab bar
         let bar_height = if let Some(tab) = self.tab_manager.active_tab() {
-            if tab.find_replace_state.is_replace_mode { 2 } else { 1 }
+            if tab.find_replace_state.is_replace_mode {
+                2
+            } else {
+                1
+            }
         } else {
             return false;
         };
@@ -4047,7 +4120,7 @@ impl App {
         let available_width = (self.terminal_size.0 - editor_start_x) as usize;
         let fixed_widths = 46;
         let input_width = available_width.saturating_sub(fixed_widths);
-        
+
         let find_label_width = 10;
         let find_input_start = find_label_width;
         let find_input_end = find_input_start + input_width;
@@ -4065,11 +4138,17 @@ impl App {
                 if mouse.row == bar_start_y {
                     // Find row
                     // Debug: Log click position and button boundaries
-                    eprintln!("Click at column {}, Find Next: {}-{}, Case: {}-{}, Word: {}-{}", 
-                        relative_column, find_next_start, find_next_start + find_next_width,
-                        case_btn_start, case_btn_start + case_btn_width,
-                        word_btn_start, word_btn_start + word_btn_width);
-                    
+                    eprintln!(
+                        "Click at column {}, Find Next: {}-{}, Case: {}-{}, Word: {}-{}",
+                        relative_column,
+                        find_next_start,
+                        find_next_start + find_next_width,
+                        case_btn_start,
+                        case_btn_start + case_btn_width,
+                        word_btn_start,
+                        word_btn_start + word_btn_width
+                    );
+
                     if relative_column >= find_input_start && relative_column < find_input_end {
                         // Click on find input field
                         if let Some(tab) = self.tab_manager.active_tab_mut() {
@@ -4081,20 +4160,27 @@ impl App {
                             }
                         }
                         return true;
-                    } else if relative_column >= find_next_start && relative_column < find_next_start + find_next_width {
+                    } else if relative_column >= find_next_start
+                        && relative_column < find_next_start + find_next_width
+                    {
                         // Click on Find Next button
                         if let Some(tab) = self.tab_manager.active_tab_mut() {
                             tab.find_next();
                         }
                         return true;
-                    } else if relative_column >= case_btn_start && relative_column < case_btn_start + case_btn_width {
+                    } else if relative_column >= case_btn_start
+                        && relative_column < case_btn_start + case_btn_width
+                    {
                         // Toggle case sensitive
                         if let Some(tab) = self.tab_manager.active_tab_mut() {
-                            tab.find_replace_state.case_sensitive = !tab.find_replace_state.case_sensitive;
+                            tab.find_replace_state.case_sensitive =
+                                !tab.find_replace_state.case_sensitive;
                             tab.perform_find();
                         }
                         return true;
-                    } else if relative_column >= word_btn_start && relative_column < word_btn_start + word_btn_width {
+                    } else if relative_column >= word_btn_start
+                        && relative_column < word_btn_start + word_btn_width
+                    {
                         // Toggle whole word
                         if let Some(tab) = self.tab_manager.active_tab_mut() {
                             tab.find_replace_state.whole_word = !tab.find_replace_state.whole_word;
@@ -4107,17 +4193,20 @@ impl App {
                     if let Some(tab) = self.tab_manager.active_tab() {
                         if tab.find_replace_state.is_replace_mode {
                             // Similar layout for replace row
-                            let replace_input_start = find_label_width;  // Same as find input
+                            let replace_input_start = find_label_width; // Same as find input
                             let replace_input_end = find_input_end;
                             let replace_btn_start = match_counter_start + match_counter_width;
                             let replace_btn_width = 12;
                             let replace_all_start = replace_btn_start + replace_btn_width;
-                            let replace_all_width = 10;  // Spans positions 4 and 5 (5+5)
+                            let replace_all_width = 10; // Spans positions 4 and 5 (5+5)
 
-                            if relative_column >= replace_input_start && relative_column < replace_input_end {
+                            if relative_column >= replace_input_start
+                                && relative_column < replace_input_end
+                            {
                                 // Click on replace input field
                                 if let Some(tab) = self.tab_manager.active_tab_mut() {
-                                    tab.find_replace_state.focused_field = FindFocusedField::Replace;
+                                    tab.find_replace_state.focused_field =
+                                        FindFocusedField::Replace;
                                     // Set cursor position based on click
                                     let text_pos = relative_column - replace_input_start;
                                     if text_pos <= tab.find_replace_state.replace_query.len() {
@@ -4125,13 +4214,17 @@ impl App {
                                     }
                                 }
                                 return true;
-                            } else if relative_column >= replace_btn_start && relative_column < replace_btn_start + replace_btn_width {
+                            } else if relative_column >= replace_btn_start
+                                && relative_column < replace_btn_start + replace_btn_width
+                            {
                                 // Click on Replace button
                                 if let Some(tab) = self.tab_manager.active_tab_mut() {
                                     tab.replace_current();
                                 }
                                 return true;
-                            } else if relative_column >= replace_all_start && relative_column < replace_all_start + replace_all_width {
+                            } else if relative_column >= replace_all_start
+                                && relative_column < replace_all_start + replace_all_width
+                            {
                                 // Click on Replace All button
                                 if let Some(tab) = self.tab_manager.active_tab_mut() {
                                     tab.replace_all();
